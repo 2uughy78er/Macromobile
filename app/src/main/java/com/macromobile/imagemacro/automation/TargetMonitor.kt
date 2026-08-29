@@ -57,47 +57,60 @@ class TargetMonitor(
                         delay(interval)
                         continue
                     }
-                    val frame = when (val r = capture.captureFrame()) {
+                    // 매크로 엔진과 동시에 돌기 때문에 공용 프레임 슬롯을 쓰면 안 된다.
+                    // 엔진이 분석 중인 화면을 이쪽에서 해제해버릴 수 있다.
+                    val frame = when (val r = capture.captureStandalone()) {
                         is CaptureResult.Ok -> r.frame
                         is CaptureResult.Error -> {
                             delay(interval)
                             continue
                         }
                     }
-                    val result = detector.checkTargets(
-                        frame = frame,
-                        macro = macro,
-                        settings = settings,
-                        analysisScale = analysisScale,
-                        stopAtFirstHit = true,
-                    )
-                    if (result.success) {
-                        consecutive++
-                        if (consecutive >= required) {
-                            val primary = result.primary
-                            val path = if (settings.saveScreenshotOnFound) {
-                                files.saveScreenshot(frame.bitmap, "target_found")?.absolutePath
-                            } else {
+                    val found: TargetFoundInfo?
+                    try {
+                        val result = detector.checkTargets(
+                            frame = frame,
+                            macro = macro,
+                            settings = settings,
+                            analysisScale = analysisScale,
+                            stopAtFirstHit = true,
+                        )
+                        if (!result.success) {
+                            consecutive = 0
+                            found = null
+                        } else {
+                            consecutive++
+                            found = if (consecutive < required) {
                                 null
-                            }
-                            onFound(
+                            } else {
+                                val primary = result.primary
                                 TargetFoundInfo(
                                     targetName = primary?.templateName?.ifBlank { "이름 없는 타겟" }
                                         ?: "타겟",
                                     score = primary?.match?.score ?: result.bestScore,
                                     matches = result.matches,
-                                    screenshotPath = path,
+                                    screenshotPath = if (settings.saveScreenshotOnFound) {
+                                        files.saveScreenshot(frame.bitmap, "target_found")?.absolutePath
+                                    } else {
+                                        null
+                                    },
                                     screenWidth = frame.width,
                                     screenHeight = frame.height,
-                                ),
-                            )
-                            return@launch
+                                )
+                            }
                         }
-                        // 연속 검출을 확인하려면 짧게 다시 본다.
+                    } finally {
+                        frame.releaseAll()
+                    }
+
+                    if (found != null) {
+                        onFound(found)
+                        return@launch
+                    }
+                    if (consecutive > 0) {
+                        // 연속 검출을 확인해야 하므로 짧게 다시 본다.
                         delay(minOf(interval, CONSECUTIVE_RECHECK_MS))
                         continue
-                    } else {
-                        consecutive = 0
                     }
                 } catch (e: CancellationException) {
                     throw e

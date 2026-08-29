@@ -18,6 +18,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** 화면 캡처 실패 사유. 사용자에게 그대로 보여줄 수 있는 문장을 담는다. */
 sealed interface CaptureResult {
@@ -49,6 +51,14 @@ class ScreenCaptureManager(private val context: Context) {
 
     private val _active = MutableStateFlow(false)
     val active: StateFlow<Boolean> = _active.asStateFlow()
+
+    /**
+     * ImageReader 에서 프레임을 꺼내는 구간을 한 번에 하나만 실행하도록 막는다.
+     *
+     * 매크로 엔진과 타겟 감시가 동시에 화면을 요청할 수 있는데, `acquireLatestImage` 를
+     * 겹쳐서 부르면 버퍼 개수를 넘겨 예외가 나거나 엉뚱한 프레임을 가져간다.
+     */
+    private val acquireLock = Mutex()
 
     /** 마지막으로 캡처한 프레임. 짧은 시간 안의 재요청은 이 값을 재사용한다. */
     @Volatile
@@ -121,7 +131,11 @@ class ScreenCaptureManager(private val context: Context) {
     }
 
     /**
-     * 최신 프레임을 가져온다.
+     * 매크로 엔진이 쓰는 공용 프레임을 가져온다.
+     *
+     * 돌려준 프레임은 **다음 [captureFrame] 호출 때 해제**되므로 오래 들고 있으면 안 된다.
+     * 이 슬롯은 순차적으로 도는 매크로 엔진 전용이다. 엔진과 동시에 도는 코드
+     * (타겟 감시, 이미지 등록 화면)는 반드시 [captureStandalone] 을 써야 한다.
      *
      * @param maxAgeMs 이 시간 안에 캡처한 프레임이 있으면 재사용한다(0 이면 항상 새로 캡처).
      */
@@ -137,7 +151,7 @@ class ScreenCaptureManager(private val context: Context) {
 
         // VirtualDisplay 가 첫 프레임을 그릴 때까지 잠깐 기다려야 하는 경우가 있다.
         repeat(ACQUIRE_RETRIES) { attempt ->
-            when (val r = acquireOnce(track = true)) {
+            when (val r = acquireLock.withLock { acquireOnce(track = true) }) {
                 is CaptureResult.Ok -> return r
                 is CaptureResult.Error -> if (attempt == ACQUIRE_RETRIES - 1) return r
             }
@@ -149,16 +163,16 @@ class ScreenCaptureManager(private val context: Context) {
     /**
      * 호출한 쪽이 소유하는 독립된 프레임을 캡처한다.
      *
-     * [captureFrame] 이 돌려주는 프레임은 다음 캡처 때 해제되므로, 이미지 등록 화면처럼
-     * 화면을 오래 들고 있어야 하는 곳에서는 이 메서드를 쓴다. 다 쓴 뒤에는 호출한 쪽이
-     * `releaseAll()` 로 정리해야 한다.
+     * [captureFrame] 의 공용 슬롯을 건드리지 않으므로, 매크로 엔진과 **동시에** 도는
+     * 코드(타겟 감시)나 화면을 오래 들고 있어야 하는 곳(이미지 등록 화면)에서 쓴다.
+     * 다 쓴 뒤에는 호출한 쪽이 `release()` 또는 `releaseAll()` 로 정리해야 한다.
      */
     suspend fun captureStandalone(): CaptureResult {
         if (!_active.value) {
             return CaptureResult.Error("화면 캡처가 시작되지 않았습니다. 화면 캡처 권한을 허용해주세요.")
         }
         repeat(ACQUIRE_RETRIES) { attempt ->
-            when (val r = acquireOnce(track = false)) {
+            when (val r = acquireLock.withLock { acquireOnce(track = false) }) {
                 is CaptureResult.Ok -> return r
                 is CaptureResult.Error -> if (attempt == ACQUIRE_RETRIES - 1) return r
             }
