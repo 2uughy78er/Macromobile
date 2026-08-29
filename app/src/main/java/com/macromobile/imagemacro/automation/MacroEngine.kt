@@ -20,6 +20,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.math.roundToInt
 
 /**
  * 매크로 실행 엔진.
@@ -198,8 +199,18 @@ class MacroEngine(
                     }
 
                     is CycleResult.TargetHit -> {
-                        reportTargetFound(cycleResult.info)
-                        return
+                        successes++
+                        _status.update { it.copy(successCount = successes) }
+                        if (repeat.stopOnTargetFound) {
+                            reportTargetFound(cycleResult.info)
+                            return
+                        }
+                        // "타겟 발견 시 중지"를 꺼둔 경우: 기록만 남기고 계속 돈다.
+                        appendLog(
+                            "타겟 '${cycleResult.info.targetName}' 발견 " +
+                                "(유사도 ${formatScore(cycleResult.info.score)}) - 설정에 따라 계속 진행합니다.",
+                            RunLogEntry.Level.SUCCESS,
+                        )
                     }
                 }
                 ctx.sleep(repeat.cycleDelayMs)
@@ -255,6 +266,14 @@ class MacroEngine(
 
     private fun startMonitor(macro: Macro, settings: AppSettings) {
         if (!macro.targetSettings.monitorEnabled) return
+        // 감시의 목적은 "발견 즉시 중지"이므로, 중지하지 않을 거면 켤 이유가 없다.
+        if (!macro.repeat.stopOnTargetFound) {
+            appendLog(
+                "'타겟 발견 시 중지'가 꺼져 있어 실시간 타겟 감시를 시작하지 않습니다.",
+                RunLogEntry.Level.WARN,
+            )
+            return
+        }
         monitor.start(
             scope = scope,
             macro = macro,
@@ -290,7 +309,7 @@ class MacroEngine(
             )
         }
         appendLog(
-            "🎯 타겟 발견: ${info.targetName} (유사도 ${"%.3f".format(info.score)}) - 매크로를 중지했습니다.",
+            "🎯 타겟 발견: ${info.targetName} (유사도 ${formatScore(info.score)}) - 매크로를 중지했습니다.",
             RunLogEntry.Level.SUCCESS,
         )
     }
@@ -318,6 +337,10 @@ class MacroEngine(
             it.copy(log = (it.log + entry).takeLast(MAX_LOG_LINES))
         }
     }
+
+    /** 유사도를 소수점 셋째 자리까지 보여준다. */
+    private fun formatScore(score: Float): String =
+        ((score * 1000).roundToInt() / 1000f).toString()
 
     private companion object {
         const val TAG = "MacroEngine"

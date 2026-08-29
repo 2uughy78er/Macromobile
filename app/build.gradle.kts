@@ -16,6 +16,13 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         vectorDrawables.useSupportLibrary = true
+
+        ndk {
+            // OpenCV 네이티브 라이브러리는 ABI 하나당 30MB 가까이 된다.
+            // 실제 안드로이드 폰·태블릿이 쓰는 두 ABI 만 담아 APK 크기를 절반 이하로 줄인다.
+            // (에뮬레이터에서 돌려보려면 "x86_64" 를 여기에 추가하면 된다.)
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     signingConfigs {

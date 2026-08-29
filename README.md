@@ -137,6 +137,10 @@ ROOT 권한 없이 동작하는 **범용 이미지 기반 자동화 매크로** 
 | `image-macro-debug-apk` | 디버그 빌드. 바로 설치해서 쓰면 됩니다. |
 | `image-macro-release-apk` | 릴리스 빌드(기본은 서명 없음). |
 
+> **APK 크기**: OpenCV 네이티브 라이브러리 때문에 APK 는 80MB 안팎입니다.
+> 실제 기기가 쓰는 `arm64-v8a` / `armeabi-v7a` 두 ABI 만 담고 있습니다.
+> 에뮬레이터에서 돌려보려면 `app/build.gradle.kts` 의 `abiFilters` 에 `"x86_64"` 를 추가하세요.
+
 > **어떤 걸 받아야 하나요?** 그냥 써볼 거라면 **debug** 를 받으세요.
 > debug APK 는 CI 가 자동으로 서명하므로 별도 설정 없이 설치됩니다.
 > release APK 는 서명 키를 넣지 않으면 서명되지 않아 그대로는 설치되지 않습니다.
