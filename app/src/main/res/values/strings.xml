@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Image Macro</string>
+    <string name="accessibility_service_label">Image Macro 자동 조작</string>
+    <string name="accessibility_service_description">등록한 이미지를 찾아 화면을 자동으로 터치·스와이프하고 텍스트를 입력합니다. 이 서비스는 매크로 실행 중에만 화면을 조작하며, 어떤 정보도 외부로 전송하지 않습니다.</string>
+    <string name="channel_running_name">매크로 실행</string>
+    <string name="channel_running_desc">매크로가 실행 중임을 알립니다.</string>
+</resources>
