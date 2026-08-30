@@ -159,6 +159,74 @@ class MacroViewModel(app: Application) : AndroidViewModel(app) {
 
     fun macro(id: String): Macro? = container.macroRepository.get(id)
 
+    /** 내보낼 때 제안할 파일 이름. */
+    fun backupFileName(macro: Macro): String {
+        val safe = macro.displayName().replace(Regex("[^A-Za-z0-9가-힣 _-]"), "_").trim()
+        return "${safe.ifBlank { "macro" }}.macro.zip"
+    }
+
+    /**
+     * 매크로와 등록한 이미지를 파일 하나로 내보낸다.
+     *
+     * 앱을 지웠다 깔거나 기기를 바꿔도 작업물을 되살릴 수 있게 하는 백업이다.
+     */
+    fun exportMacro(macro: Macro, uri: Uri) {
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                val stream = withContext(Dispatchers.IO) {
+                    runCatching { getApplication<Application>().contentResolver.openOutputStream(uri) }
+                        .getOrNull()
+                }
+                if (stream == null) {
+                    showMessage("파일을 만들지 못했습니다. 다른 위치를 선택해주세요.")
+                    return@launch
+                }
+                val result = stream.use { container.macroBackup.export(macro, it) }
+                if (result.isSuccess) {
+                    showMessage("'${macro.displayName()}' 을(를) 파일로 저장했습니다.")
+                } else {
+                    showMessage("내보내기에 실패했습니다: ${friendlyMessage(result.exceptionOrNull())}")
+                }
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
+    /** 내보낸 파일에서 매크로를 되살린다. 항상 새 매크로로 추가한다. */
+    fun importMacro(uri: Uri, onImported: (Macro) -> Unit = {}) {
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                val stream = withContext(Dispatchers.IO) {
+                    runCatching { getApplication<Application>().contentResolver.openInputStream(uri) }
+                        .getOrNull()
+                }
+                if (stream == null) {
+                    showMessage("파일을 열지 못했습니다. 다른 파일을 선택해주세요.")
+                    return@launch
+                }
+                val result = stream.use { container.macroBackup.import(it) }
+                container.invalidateImageCache()
+                result.onSuccess { macro ->
+                    showMessage(
+                        "'${macro.displayName()}' 을(를) 가져왔습니다. " +
+                            "(단계 ${macro.steps.size}개 · 이미지 ${macro.templates.size}개)",
+                    )
+                    onImported(macro)
+                }.onFailure {
+                    showMessage("가져오기에 실패했습니다: ${friendlyMessage(it)}")
+                }
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
+    private fun friendlyMessage(error: Throwable?): String =
+        error?.message?.takeIf { it.isNotBlank() } ?: "알 수 없는 오류"
+
     fun exportMacroJson(macro: Macro): String = container.macroRepository.exportJson(macro)
 
     // ------------------------------------------------------------------

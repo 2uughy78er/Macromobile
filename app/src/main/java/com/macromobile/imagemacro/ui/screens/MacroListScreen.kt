@@ -1,5 +1,7 @@
 package com.macromobile.imagemacro.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -48,6 +51,10 @@ fun MacroListScreen(
 ) {
     val macros by viewModel.macros.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    // 내보낸 백업 파일에서 매크로를 되살린다.
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> if (uri != null) viewModel.importMacro(uri) }
     var showCreate by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<Macro?>(null) }
 
@@ -55,7 +62,13 @@ fun MacroListScreen(
     val (screenWidth, screenHeight) = remember { viewModel.currentScreenSize() }
 
     Scaffold(
-        topBar = { MacroTopBar("매크로 목록", onBack) },
+        topBar = {
+            MacroTopBar("매크로 목록", onBack) {
+                IconButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+                    Icon(Icons.Default.FileDownload, contentDescription = "백업 파일에서 가져오기")
+                }
+            }
+        },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showCreate = true },
@@ -81,6 +94,10 @@ fun MacroListScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Spacer(Modifier.height(16.dp))
+                TextButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+                    Text("백업 파일에서 가져오기")
+                }
             }
         } else {
             LazyColumn(

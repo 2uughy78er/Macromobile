@@ -1,5 +1,7 @@
 package com.macromobile.imagemacro.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -20,6 +22,7 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -71,8 +74,22 @@ fun MacroEditorScreen(
     val macro = remember(macros, macroId) { macros.firstOrNull { it.id == macroId } }
     var pendingTemplateDelete by remember { mutableStateOf<Template?>(null) }
     var pendingStepDelete by remember { mutableStateOf<MacroStep?>(null) }
+    // 매크로 + 등록한 이미지를 파일 하나로 백업한다.
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip"),
+    ) { uri -> if (uri != null && macro != null) viewModel.exportMacro(macro, uri) }
 
-    Scaffold(topBar = { MacroTopBar(macro?.displayName() ?: "매크로 편집", onBack) }) { padding ->
+    Scaffold(
+        topBar = {
+            MacroTopBar(macro?.displayName() ?: "매크로 편집", onBack) {
+                if (macro != null) {
+                    IconButton(onClick = { exportLauncher.launch(viewModel.backupFileName(macro)) }) {
+                        Icon(Icons.Default.FileUpload, contentDescription = "백업 파일로 내보내기")
+                    }
+                }
+            }
+        },
+    ) { padding ->
         if (macro == null) {
             Column(Modifier.fillMaxSize().padding(padding).padding(24.dp)) {
                 Text("매크로를 찾을 수 없습니다.", color = MaterialTheme.colorScheme.error)
@@ -107,6 +124,20 @@ fun MacroEditorScreen(
                 Text(
                     "기준 해상도 ${macro.referenceWidth}×${macro.referenceHeight} · " +
                         "다른 해상도 기기에서 자동 보정됩니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { exportLauncher.launch(viewModel.backupFileName(macro)) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("백업 파일로 내보내기")
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "단계와 등록한 이미지를 파일 하나로 저장합니다. " +
+                        "앱을 지웠다 깔거나 기기를 바꿔도 이 파일로 되살릴 수 있습니다.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

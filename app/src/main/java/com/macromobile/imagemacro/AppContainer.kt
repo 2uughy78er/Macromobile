@@ -6,6 +6,7 @@ import com.macromobile.imagemacro.input.KeyEventController
 import com.macromobile.imagemacro.input.TextInputController
 import com.macromobile.imagemacro.ocr.MlKitOcrEngine
 import com.macromobile.imagemacro.ocr.OcrEngine
+import com.macromobile.imagemacro.storage.MacroBackup
 import com.macromobile.imagemacro.storage.MacroRepository
 import com.macromobile.imagemacro.storage.SettingsRepository
 import com.macromobile.imagemacro.storage.TemplateFiles
@@ -26,6 +27,7 @@ class AppContainer(context: Context) {
     val files = TemplateFiles(appContext)
     val macroRepository = MacroRepository(files)
     val settingsRepository = SettingsRepository(appContext)
+    val macroBackup = MacroBackup(files, macroRepository)
 
     val templateCache = TemplateCache()
     val templateMatcher = TemplateMatcher(templateCache)
