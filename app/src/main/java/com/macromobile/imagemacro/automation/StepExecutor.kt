@@ -87,10 +87,8 @@ class StepExecutor(
     private suspend fun doTap(ctx: ExecutionContext, step: MacroStep, label: String): StepOutcome {
         val point = step.point
             ?: return StepOutcome.Abort("'$label' 단계에 터치할 좌표가 없습니다. 단계를 편집해 좌표를 지정해주세요.")
-        val frame = when (val r = capture.captureFrame(maxAgeMs = FRESH_ENOUGH_MS)) {
-            is CaptureResult.Ok -> r.frame
-            is CaptureResult.Error -> return StepOutcome.Abort(r.message)
-        }
+        val (frame, error) = captureOnce(maxAgeMs = FRESH_ENOUGH_MS)
+        if (frame == null) return StepOutcome.Abort("'$label' 단계: ${error ?: "화면을 가져오지 못했습니다."}")
         val mapper = detector.mapperFor(ctx.macro, frame)
         val (x, y) = mapper.toScreen(point)
         ctx.log("$label: (${point.x}, ${point.y}) 터치")
@@ -172,10 +170,13 @@ class StepExecutor(
 
         while (System.currentTimeMillis() < deadline) {
             ctx.gate()
-            val frame = when (val r = capture.captureFrame()) {
-                is CaptureResult.Ok -> r.frame
-                is CaptureResult.Error -> return StepOutcome.Abort(r.message)
+            val captured = capture.captureFrame()
+            if (captured is CaptureResult.Error) {
+                if (captured.fatal) return StepOutcome.Abort(captured.message)
+                delay(interval)
+                continue
             }
+            val frame = (captured as CaptureResult.Ok).frame
             val group = detector.findGroup(
                 frame = frame,
                 macro = ctx.macro,
@@ -218,10 +219,8 @@ class StepExecutor(
         if (start == null || end == null) {
             return StepOutcome.Abort("'$label' 단계에 스와이프 시작/끝 좌표가 없습니다.")
         }
-        val frame = when (val r = capture.captureFrame(maxAgeMs = FRESH_ENOUGH_MS)) {
-            is CaptureResult.Ok -> r.frame
-            is CaptureResult.Error -> return StepOutcome.Abort(r.message)
-        }
+        val (frame, error) = captureOnce(maxAgeMs = FRESH_ENOUGH_MS)
+        if (frame == null) return StepOutcome.Abort("'$label' 단계: ${error ?: "화면을 가져오지 못했습니다."}")
         val mapper = detector.mapperFor(ctx.macro, frame)
         val (sx, sy) = mapper.toScreen(start)
         val (ex, ey) = mapper.toScreen(end)
@@ -265,10 +264,8 @@ class StepExecutor(
     }
 
     private suspend fun doScreenshot(ctx: ExecutionContext, label: String): StepOutcome {
-        val frame = when (val r = capture.captureFrame()) {
-            is CaptureResult.Ok -> r.frame
-            is CaptureResult.Error -> return StepOutcome.Abort(r.message)
-        }
+        val (frame, error) = captureOnce()
+        if (frame == null) return StepOutcome.Abort("'$label' 단계: ${error ?: "화면을 가져오지 못했습니다."}")
         val saved = files.saveScreenshot(frame.bitmap, "shot")
         if (saved == null) {
             ctx.log("$label: 화면 저장에 실패했습니다.", RunLogEntry.Level.WARN)
@@ -293,10 +290,13 @@ class StepExecutor(
 
         while (System.currentTimeMillis() < deadline) {
             ctx.gate()
-            val frame = when (val r = capture.captureFrame()) {
-                is CaptureResult.Ok -> r.frame
-                is CaptureResult.Error -> return StepOutcome.Abort(r.message)
+            val captured = capture.captureFrame()
+            if (captured is CaptureResult.Error) {
+                if (captured.fatal) return StepOutcome.Abort(captured.message)
+                delay(poll)
+                continue
             }
+            val frame = (captured as CaptureResult.Ok).frame
             val mapper = detector.mapperFor(ctx.macro, frame)
             val rect = mapper.toScreenRect(roi)
                 ?: return StepOutcome.Abort("'$label' 단계의 ROI 가 화면을 벗어났습니다.")
@@ -344,10 +344,8 @@ class StepExecutor(
         ctx.sleep(settings.settleDelayMs)
         ctx.gate()
 
-        val frame = when (val r = capture.captureFrame()) {
-            is CaptureResult.Ok -> r.frame
-            is CaptureResult.Error -> return StepOutcome.Abort(r.message)
-        }
+        val (frame, error) = captureOnce()
+        if (frame == null) return StepOutcome.Abort("'$label' 단계: ${error ?: "화면을 가져오지 못했습니다."}")
         val result = detector.checkTargets(
             frame = frame,
             macro = ctx.macro,
@@ -375,6 +373,27 @@ class StepExecutor(
     // 공용 도우미
     // ------------------------------------------------------------------
 
+    /**
+     * 화면을 한 장 가져온다. 일시적인 실패는 잠깐 기다렸다 다시 시도한다.
+     *
+     * 화면이 멈춰 있으면 새 프레임이 안 나올 수 있는데, 그건 오류가 아니라 그냥
+     * "화면이 그대로"라는 뜻이다. 권한이 끊긴 경우에만 매크로를 멈춘다.
+     *
+     * @return (프레임, 실패 사유). 성공하면 사유가 null, 실패하면 프레임이 null 이다.
+     */
+    private suspend fun captureOnce(maxAgeMs: Long = 0L): Pair<ScreenFrame?, String?> {
+        var lastMessage = "화면을 가져오지 못했습니다."
+        repeat(SINGLE_CAPTURE_ATTEMPTS) {
+            val captured = capture.captureFrame(maxAgeMs)
+            if (captured is CaptureResult.Ok) return captured.frame to null
+            val error = captured as CaptureResult.Error
+            if (error.fatal) return null to error.message
+            lastMessage = error.message
+            delay(SINGLE_CAPTURE_RETRY_MS)
+        }
+        return null to lastMessage
+    }
+
     /** 이미지 검색 결과와, 마지막으로 본 화면을 함께 담는다. */
     private data class SearchOutcome(
         val result: GroupMatchResult?,
@@ -394,14 +413,29 @@ class StepExecutor(
         val poll = ctx.pollInterval(step.pollIntervalMs)
         var best: GroupMatchResult? = null
         var lastFrame: ScreenFrame? = null
+        var matchedFrame: ScreenFrame? = null
 
         while (true) {
             ctx.gate()
-            val frame = when (val r = capture.captureFrame()) {
-                is CaptureResult.Ok -> r.frame
-                is CaptureResult.Error -> return SearchOutcome(best, null, r.message)
+            val captured = capture.captureFrame()
+            if (captured is CaptureResult.Error) {
+                // 권한이 끊긴 게 아니라면 잠시 뒤 다시 본다. 시간 안에 못 찾으면 timeout 정책을 따른다.
+                if (captured.fatal) return SearchOutcome(best, lastFrame, captured.message)
+                if (System.currentTimeMillis() >= deadline) break
+                delay(poll)
+                continue
             }
+            val frame = (captured as CaptureResult.Ok).frame
             lastFrame = frame
+
+            // 화면이 그대로면 같은 프레임이 다시 온다. 결과가 같으므로 매칭을 건너뛴다.
+            if (frame === matchedFrame) {
+                if (System.currentTimeMillis() >= deadline) break
+                delay(poll)
+                continue
+            }
+            matchedFrame = frame
+
             val group = detector.findGroup(
                 frame = frame,
                 macro = ctx.macro,
@@ -537,5 +571,9 @@ class StepExecutor(
         /** 좌표 터치처럼 최신 화면이 꼭 필요하지 않을 때 재사용할 프레임 나이. */
         const val FRESH_ENOUGH_MS = 400L
         const val DEFAULT_IF_FOUND_TIMEOUT_MS = 2_000L
+
+        /** 단발 캡처가 일시적으로 실패했을 때의 재시도 횟수와 간격. */
+        const val SINGLE_CAPTURE_ATTEMPTS = 6
+        const val SINGLE_CAPTURE_RETRY_MS = 150L
     }
 }

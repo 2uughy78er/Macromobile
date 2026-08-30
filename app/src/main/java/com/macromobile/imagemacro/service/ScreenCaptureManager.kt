@@ -24,7 +24,13 @@ import kotlinx.coroutines.sync.withLock
 /** 화면 캡처 실패 사유. 사용자에게 그대로 보여줄 수 있는 문장을 담는다. */
 sealed interface CaptureResult {
     data class Ok(val frame: ScreenFrame) : CaptureResult
-    data class Error(val message: String) : CaptureResult
+
+    /**
+     * @param fatal 매크로를 더 진행할 수 없는 상태인지.
+     *   `true` 면 권한 만료·캡처 중지처럼 다시 시도해도 소용없는 경우라 매크로를 멈춘다.
+     *   `false` 면 아직 첫 프레임이 안 나온 것처럼 잠시 뒤 다시 시도하면 되는 경우다.
+     */
+    data class Error(val message: String, val fatal: Boolean = true) : CaptureResult
 }
 
 /**
@@ -157,7 +163,7 @@ class ScreenCaptureManager(private val context: Context) {
             }
             delay(ACQUIRE_RETRY_DELAY_MS)
         }
-        return CaptureResult.Error("화면을 캡처하지 못했습니다.")
+        return CaptureResult.Error("화면을 캡처하지 못했습니다.", fatal = false)
     }
 
     /**
@@ -178,7 +184,7 @@ class ScreenCaptureManager(private val context: Context) {
             }
             delay(ACQUIRE_RETRY_DELAY_MS)
         }
-        return CaptureResult.Error("화면을 캡처하지 못했습니다.")
+        return CaptureResult.Error("화면을 캡처하지 못했습니다.", fatal = false)
     }
 
     /** 마지막으로 캡처한 프레임(새로 캡처하지 않음). */
@@ -188,14 +194,15 @@ class ScreenCaptureManager(private val context: Context) {
         val reader = imageReader
             ?: return CaptureResult.Error("화면 캡처가 준비되지 않았습니다.")
 
+
         var image: Image? = null
         try {
             // acquireLatestImage 는 큐에 쌓인 오래된 프레임을 알아서 버리고 최신 것만 준다.
             image = reader.acquireLatestImage()
-            val img = image ?: return CaptureResult.Error("아직 화면 프레임이 준비되지 않았습니다.")
+            val img = image ?: return reuseLastFrame(track)
 
             val bitmap = toBitmap(img)
-                ?: return CaptureResult.Error("화면 프레임을 이미지로 변환하지 못했습니다.")
+                ?: return CaptureResult.Error("화면 프레임을 이미지로 변환하지 못했습니다.", fatal = false)
 
             val frame = ScreenFrame(bitmap)
             if (track) swapLastFrame(frame)
@@ -205,10 +212,39 @@ class ScreenCaptureManager(private val context: Context) {
             return CaptureResult.Error("메모리가 부족합니다. 매칭 해상도를 낮추거나 다른 앱을 종료해주세요.")
         } catch (e: Exception) {
             Log.e(TAG, "화면 캡처 실패", e)
-            return CaptureResult.Error("화면 캡처에 실패했습니다: ${e.message ?: "알 수 없는 오류"}")
+            return CaptureResult.Error(
+                "화면 캡처에 실패했습니다: ${e.message ?: "알 수 없는 오류"}",
+                fatal = false,
+            )
         } finally {
             image?.close()
         }
+    }
+
+    /**
+     * 새 프레임이 없을 때 직전 프레임을 대신 돌려준다.
+     *
+     * VirtualDisplay 는 **화면 내용이 바뀔 때만** 새 프레임을 만든다. 로딩 화면이나
+     * 대기 화면처럼 그림이 멈춰 있으면 `acquireLatestImage()` 가 계속 null 을 준다.
+     * 이때 직전 프레임이 곧 지금 화면이므로 그대로 쓰는 것이 맞다.
+     * (이걸 오류로 처리하면 정지 화면을 기다리는 단계에서 매크로가 그냥 멈춰버린다.)
+     */
+    private fun reuseLastFrame(track: Boolean): CaptureResult {
+        val previous = lastFrame
+            ?: return CaptureResult.Error(
+                "아직 첫 화면 프레임이 준비되지 않았습니다. 잠시 후 다시 시도합니다.",
+                fatal = false,
+            )
+        if (track) return CaptureResult.Ok(previous)
+
+        // 독립 프레임을 요청한 쪽은 자기 것을 해제하므로 복사본을 준다.
+        val copy = try {
+            if (previous.bitmap.isRecycled) null else previous.bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        } catch (e: OutOfMemoryError) {
+            Log.e(TAG, "직전 프레임 복사 중 메모리 부족", e)
+            null
+        } ?: return CaptureResult.Error("화면 프레임을 복사하지 못했습니다.", fatal = false)
+        return CaptureResult.Ok(ScreenFrame(copy, previous.timestampMs))
     }
 
     /**
@@ -288,7 +324,7 @@ class ScreenCaptureManager(private val context: Context) {
     private companion object {
         const val TAG = "ScreenCaptureManager"
         const val IMAGE_BUFFER_SIZE = 3
-        const val ACQUIRE_RETRIES = 5
-        const val ACQUIRE_RETRY_DELAY_MS = 60L
+        const val ACQUIRE_RETRIES = 12
+        const val ACQUIRE_RETRY_DELAY_MS = 80L
     }
 }
