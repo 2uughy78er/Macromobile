@@ -18,9 +18,13 @@ captures/
 *.dex
 output.json
 
-# Keystore - 서명 키는 절대 저장소에 올리지 않는다
+# 서명 키는 저장소에 올리지 않는다.
 *.jks
 *.keystore
+# 예외: debug 전용 고정 키. 이게 없으면 빌드마다 서명이 달라져
+# 덮어쓰기 설치가 막히고, 그때마다 만들어 둔 매크로가 사라진다.
+# 비밀번호는 안드로이드 표준값(android)이라 숨길 것이 없다.
+!keystore/debug.keystore
 
 # OS
 .DS_Store

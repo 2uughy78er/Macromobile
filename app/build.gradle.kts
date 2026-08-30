@@ -26,6 +26,24 @@ android {
     }
 
     signingConfigs {
+        /**
+         * debug 빌드 전용 고정 키.
+         *
+         * 이 키를 저장소에 두지 않으면 빌드할 때마다 안드로이드 빌드 도구가 임시 키를
+         * 새로 만들고, 그러면 서명이 매번 달라져 **덮어쓰기 설치가 막힌다**.
+         * 그때마다 앱을 지웠다 깔아야 하고 만들어 둔 매크로가 전부 사라진다.
+         *
+         * debug 키는 보안 장치가 아니라 "같은 앱임을 알아보게 하는 표식"이다.
+         * 비밀번호도 안드로이드 표준값(android)이라 숨길 이유가 없다.
+         * 실제 배포용 서명은 아래 release 설정에서 CI 비밀값으로 따로 받는다.
+         */
+        getByName("debug") {
+            storeFile = rootProject.file("keystore/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+
         // CI 에서 서명 키가 제공되면 release APK 를 서명한다.
         // 키가 없으면 release 는 서명되지 않은 APK 로 빌드된다.
         create("release") {
@@ -43,6 +61,7 @@ android {
         debug {
             isMinifyEnabled = false
             applicationIdSuffix = ".debug"
+            signingConfig = signingConfigs.getByName("debug")
         }
         release {
             // OpenCV / ML Kit 리플렉션 이슈를 피하기 위해 축소는 기본 비활성화한다.

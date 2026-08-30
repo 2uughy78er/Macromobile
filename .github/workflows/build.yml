@@ -45,6 +45,15 @@ jobs:
       - name: Build release APK (unsigned)
         run: ./gradlew assembleRelease --stacktrace
 
+      # 서명이 빌드마다 바뀌면 덮어쓰기 설치가 막히고 매크로가 사라진다.
+      # 지문을 찍어두면 이전 빌드와 같은 키인지 바로 확인할 수 있다.
+      - name: Print debug APK signing fingerprint
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          APK=$(find app/build/outputs/apk/debug -name '*.apk' | head -1)
+          echo "APK: $APK"
+          "$APKSIGNER" verify --print-certs "$APK" | grep -i 'SHA-256 digest' || true
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
