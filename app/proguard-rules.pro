@@ -1,0 +1,8 @@
+-keep class org.opencv.** { *; }
+-dontwarn org.opencv.**
+-keep class com.google.mlkit.** { *; }
+-dontwarn com.google.mlkit.**
+-keepclassmembers class kotlinx.serialization.json.** { *** Companion; }
+-keepclasseswithmembers class kotlinx.serialization.json.** { kotlinx.serialization.KSerializer serializer(...); }
+-keep,includedescriptorclasses class com.macromobile.imagemacro.model.**$$serializer { *; }
+-keepclassmembers class com.macromobile.imagemacro.model.** { *** Companion; }
