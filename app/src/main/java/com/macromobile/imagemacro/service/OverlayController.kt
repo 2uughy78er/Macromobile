@@ -27,12 +27,21 @@ class OverlayController(private val context: Context) {
 
     private var windowManager: WindowManager? = null
     private var root: LinearLayout? = null
+    private var layoutParams: WindowManager.LayoutParams? = null
     private var statusText: TextView? = null
     private var playPause: TextView? = null
+    private var recordButton: TextView? = null
+
+    /** 마지막으로 표시한 녹화 상태. 화면을 다시 띄울 때 그대로 복원한다. */
+    private var recording = false
+    private var recordedCount = 0
 
     var onPlayPause: (() -> Unit)? = null
     var onStop: (() -> Unit)? = null
     var onOpenApp: (() -> Unit)? = null
+
+    /** 녹화 시작/중지 토글. */
+    var onRecordToggle: (() -> Unit)? = null
 
     val isShowing: Boolean get() = root != null
 
@@ -67,11 +76,13 @@ class OverlayController(private val context: Context) {
         }
         val play = button("▶") { onPlayPause?.invoke() }
         val stop = button("■") { onStop?.invoke() }
+        val record = button("●") { onRecordToggle?.invoke() }
         val open = button("🎯") { onOpenApp?.invoke() }
 
         container.addView(status)
         container.addView(play)
         container.addView(stop)
+        container.addView(record)
         container.addView(open)
 
         val params = WindowManager.LayoutParams(
@@ -94,6 +105,9 @@ class OverlayController(private val context: Context) {
             root = container
             statusText = status
             playPause = play
+            recordButton = record
+            layoutParams = params
+            applyRecordingLook()
         } catch (e: Exception) {
             Log.e(TAG, "오버레이를 띄우지 못했습니다", e)
             windowManager = null
@@ -101,6 +115,7 @@ class OverlayController(private val context: Context) {
     }
 
     fun update(status: MacroStatus) {
+        if (recording) return
         statusText?.text = when (status.state) {
             RunState.RUNNING -> "${status.progressLabel} · ${status.cycleLabel}"
             RunState.TARGET_FOUND -> "🎯 ${status.targetFound?.targetName ?: "발견"}"
@@ -109,12 +124,44 @@ class OverlayController(private val context: Context) {
         playPause?.text = if (status.state == RunState.RUNNING) "⏸" else "▶"
     }
 
+    /** 녹화 중임을 컨트롤러에 표시한다. */
+    fun setRecording(active: Boolean, count: Int) {
+        recording = active
+        recordedCount = count
+        applyRecordingLook()
+    }
+
+    private fun applyRecordingLook() {
+        recordButton?.setTextColor(if (recording) Color.rgb(255, 90, 90) else Color.WHITE)
+        if (recording) {
+            statusText?.text = "녹화 중 ${recordedCount}개"
+        }
+    }
+
+    /**
+     * 컨트롤러를 다시 붙여 맨 위로 올린다.
+     *
+     * 녹화용 전체 화면 오버레이를 띄우면 그게 위를 덮어 컨트롤러를 누를 수 없게 된다.
+     * 같은 종류의 창은 나중에 붙인 쪽이 위로 오므로, 떼었다 다시 붙여 순서를 되돌린다.
+     */
+    fun bringToFront() {
+        val view = root ?: return
+        val lp = layoutParams ?: return
+        val wm = windowManager ?: return
+        runCatching {
+            wm.removeView(view)
+            wm.addView(view, lp)
+        }.onFailure { Log.w(TAG, "컨트롤러를 위로 올리지 못했습니다", it) }
+    }
+
     fun hide() {
         val view = root ?: return
         runCatching { windowManager?.removeView(view) }
         root = null
         statusText = null
         playPause = null
+        recordButton = null
+        layoutParams = null
         windowManager = null
     }
 

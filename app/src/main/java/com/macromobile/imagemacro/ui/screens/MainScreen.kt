@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
@@ -68,6 +69,8 @@ fun MainScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val serviceError by viewModel.serviceError.collectAsStateWithLifecycle()
+    val recording by viewModel.recording.collectAsStateWithLifecycle()
+    val notice by viewModel.notice.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) { viewModel.refreshPermissions() }
@@ -78,6 +81,14 @@ fun MainScreen(
         if (text != null) {
             snackbar.showSnackbar(text)
             viewModel.clearMessage()
+        }
+    }
+
+    LaunchedEffect(notice) {
+        val text = notice
+        if (text != null) {
+            snackbar.showSnackbar(text)
+            viewModel.clearNotice()
         }
     }
 
@@ -268,6 +279,72 @@ fun MainScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
+                }
+            }
+
+            SectionCard(
+                title = "동작 녹화",
+                subtitle = if (recording.active) {
+                    "녹화 중 · ${recording.count}개 기록됨"
+                } else {
+                    "내가 하는 터치와 드래그를 그대로 단계로 만듭니다."
+                },
+            ) {
+                if (recording.active) {
+                    Text(
+                        "화면 가장자리에 빨간 테두리가 보이는 동안 하는 동작이 기록됩니다.\n" +
+                            "끝나면 아래 '녹화 중지'를 누르거나, 화면 위 컨트롤러의 ● 를 누르세요.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = { viewModel.stopRecording() },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = null)
+                        Text("  녹화 중지하고 저장")
+                    }
+                } else {
+                    Text(
+                        "이미지를 등록하지 않고도 매크로를 만들 수 있습니다. " +
+                            "녹화를 시작하면 앱이 내려가고, 그 뒤로 하시는 터치·드래그가 " +
+                            "선택한 매크로 뒤에 단계로 붙습니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = {
+                            if (selected == null) {
+                                viewModel.showMessage("먼저 녹화할 매크로를 골라주세요.")
+                            } else if (viewModel.startRecording()) {
+                                // 녹화가 실제로 시작됐을 때만 앱을 내린다.
+                                activity?.minimizeApp()
+                            }
+                        },
+                        enabled = !status.state.isActive,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.FiberManualRecord, contentDescription = null)
+                        Text("  녹화 시작")
+                    }
+                    if (status.state.isActive) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "매크로가 실행 중일 때는 녹화할 수 없습니다. 먼저 중지해주세요.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    if (!permissions.overlayGranted) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "'다른 앱 위에 표시' 권한이 필요합니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
 

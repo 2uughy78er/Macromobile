@@ -169,6 +169,12 @@ data class MacroStep(
     // ---- 좌표 ----
     /** TAP / TAP_UNTIL_* 에서 터치할 위치(기준 해상도 좌표). */
     val point: RefPoint? = null,
+    /**
+     * TAP 을 누르고 있는 시간(ms). 0 이면 짧게 톡 누른다.
+     *
+     * 길게 누르기(롱프레스)를 표현할 때 쓴다. 동작 녹화가 이 값을 채운다.
+     */
+    val tapHoldMs: Long = 0L,
     /** 이미지 매칭 중심에 더할 보정값. 단계에서 지정하면 템플릿 값보다 우선한다. */
     val clickOffsetX: Int = 0,
     val clickOffsetY: Int = 0,

@@ -381,8 +381,10 @@ private fun stepSummary(macro: Macro, step: MacroStep): String = buildString {
     }
     when (step.type) {
         ActionType.WAIT -> append(" · ${step.waitMs}ms")
-        ActionType.TAP ->
+        ActionType.TAP -> {
             append(" · (${step.point?.x ?: 0}, ${step.point?.y ?: 0})")
+            if (step.tapHoldMs > 0) append(" · ${step.tapHoldMs}ms 길게")
+        }
         ActionType.TEXT_INPUT ->
             append(" · '${step.text.take(16)}'")
         ActionType.OCR ->

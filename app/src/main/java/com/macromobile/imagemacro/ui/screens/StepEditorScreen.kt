@@ -189,6 +189,20 @@ fun StepEditorScreen(
                         point = step.point ?: RefPoint(),
                         onChange = { step = step.copy(point = it) },
                     )
+                    if (step.type == ActionType.TAP) {
+                        Spacer(Modifier.height(12.dp))
+                        NumberField(
+                            label = "누르고 있는 시간 (0 이면 짧게 톡)",
+                            value = step.tapHoldMs,
+                            onValueChange = { step = step.copy(tapHoldMs = it) },
+                            suffix = "ms",
+                        )
+                        Text(
+                            "길게 눌러야 반응하는 버튼에 쓰세요. 동작 녹화가 이 값을 자동으로 채웁니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
 

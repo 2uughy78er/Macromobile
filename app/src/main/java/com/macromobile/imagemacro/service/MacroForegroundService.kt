@@ -15,6 +15,8 @@ import com.macromobile.imagemacro.MacroApp
 import com.macromobile.imagemacro.R
 import com.macromobile.imagemacro.automation.MacroEngine
 import com.macromobile.imagemacro.automation.MacroStatus
+import com.macromobile.imagemacro.automation.RecordingResult
+import com.macromobile.imagemacro.automation.RecordingSession
 import com.macromobile.imagemacro.automation.RunState
 import com.macromobile.imagemacro.automation.StepExecutor
 import com.macromobile.imagemacro.automation.TargetMonitor
@@ -46,6 +48,11 @@ class MacroForegroundService : Service() {
     private lateinit var capture: ScreenCaptureManager
     private lateinit var engine: MacroEngine
     private lateinit var overlay: OverlayController
+    private lateinit var recorderOverlay: RecorderOverlay
+    private lateinit var recording: RecordingSession
+
+    /** 지금 녹화 중인 매크로 이름. 알림과 화면 표시에 쓴다. */
+    private var recordingMacroName = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -70,12 +77,26 @@ class MacroForegroundService : Service() {
             files = container.files,
         )
 
+        recording = RecordingSession(container.macroRepository)
+        recorderOverlay = RecorderOverlay(this, container.gestures, serviceScope).apply {
+            onGesture = { gesture ->
+                recording.add(gesture)
+                val count = recording.count.value
+                overlay.setRecording(true, count)
+                MacroController.setRecording(true, count, recordingMacroName)
+            }
+            onError = { MacroController.reportError(it) }
+        }
+
         overlay = OverlayController(this).apply {
             onPlayPause = {
                 if (engine.status.value.state == RunState.RUNNING) engine.pause() else engine.resume()
             }
             onStop = { engine.stop() }
             onOpenApp = { openApp() }
+            onRecordToggle = {
+                if (recording.recording.value) stopRecording() else serviceScope.launch { startRecording() }
+            }
         }
 
         MacroController.attach(engine, capture)
@@ -95,12 +116,92 @@ class MacroForegroundService : Service() {
     /** 실행 중일 때만 오버레이 컨트롤러를 띄운다. */
     private fun syncOverlay(status: MacroStatus, enabled: Boolean) {
         val shouldShow = enabled &&
-            (status.state.isActive || status.state == RunState.TARGET_FOUND)
+            (status.state.isActive || status.state == RunState.TARGET_FOUND ||
+                recording.recording.value)
         if (shouldShow) {
             overlay.show()
             overlay.update(status)
         } else {
             overlay.hide()
+        }
+    }
+
+    /**
+     * 동작 녹화를 시작한다.
+     *
+     * 녹화는 매크로 실행과 함께 돌 수 없다. 우리가 되돌려주는 터치와 매크로가 보내는
+     * 터치가 뒤섞이면 무엇이 사용자의 동작인지 알 수 없기 때문이다.
+     */
+    private suspend fun startRecording() {
+        if (recording.recording.value) return
+        if (engine.status.value.state.isActive) {
+            MacroController.reportError("매크로를 실행하는 중에는 녹화할 수 없습니다. 먼저 중지해주세요.")
+            return
+        }
+        if (!MacroAccessibilityService.isConnected) {
+            MacroController.reportError(
+                "접근성 서비스가 꺼져 있어 녹화한 터치를 앱에 전달할 수 없습니다.",
+            )
+            return
+        }
+        val container = MacroApp.container()
+        if (container.macroRepository.macros.value.isEmpty()) {
+            container.macroRepository.refresh()
+        }
+        val settings = container.settingsRepository.settings.first()
+        val macro = container.macroRepository.get(settings.lastMacroId)
+            ?: container.macroRepository.macros.value.firstOrNull()
+        if (macro == null) {
+            MacroController.reportError("녹화할 매크로가 없습니다. 먼저 매크로를 만들어주세요.")
+            return
+        }
+
+        val metrics = resources.displayMetrics
+        val width = if (capture.screenWidth > 0) capture.screenWidth else metrics.widthPixels
+        val height = if (capture.screenHeight > 0) capture.screenHeight else metrics.heightPixels
+
+        withContext(Dispatchers.Main) {
+            val error = recorderOverlay.start()
+            if (error != null) {
+                MacroController.reportError(error)
+                return@withContext
+            }
+            recording.start(macro, width, height, metrics.density)
+            recordingMacroName = macro.displayName()
+            MacroController.setRecording(true, 0, recordingMacroName)
+            overlay.show()
+            overlay.setRecording(true, 0)
+            // 녹화용 전체 화면 창이 컨트롤러를 덮으므로 컨트롤러를 다시 위로 올린다.
+            overlay.bringToFront()
+            updateNotification(engine.status.value)
+        }
+    }
+
+    /** 녹화를 끝내고 모은 동작을 매크로 뒤에 붙인다. */
+    private fun stopRecording() {
+        if (!recording.recording.value) return
+        recorderOverlay.stop()
+        overlay.setRecording(false, 0)
+        serviceScope.launch {
+            val result = recording.stopAndSave()
+            MacroApp.container().invalidateImageCache()
+            MacroController.setRecording(false, 0, "")
+            when (result) {
+                is RecordingResult.Saved ->
+                    MacroController.reportRecording(
+                        "'${result.macroName}' 에 ${result.addedSteps}개 단계를 추가했습니다.",
+                    )
+
+                is RecordingResult.Empty -> MacroController.reportRecording(result.message)
+                is RecordingResult.Failed -> MacroController.reportError(result.message)
+            }
+            withContext(Dispatchers.Main) {
+                syncOverlay(
+                    engine.status.value,
+                    MacroApp.container().settingsRepository.settings.first().showOverlayController,
+                )
+                updateNotification(engine.status.value)
+            }
         }
     }
 
@@ -120,6 +221,8 @@ class MacroForegroundService : Service() {
             ACTION_STOP_MACRO -> engine.stop()
             ACTION_PAUSE_MACRO -> engine.pause()
             ACTION_RESUME_MACRO -> engine.resume()
+            ACTION_START_RECORDING -> serviceScope.launch { startRecording() }
+            ACTION_STOP_RECORDING -> stopRecording()
             ACTION_SHUTDOWN -> {
                 engine.stop("서비스를 종료합니다.")
                 stopSelfSafely()
@@ -269,6 +372,8 @@ class MacroForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        recorderOverlay.stop()
+        recording.cancel()
         overlay.hide()
         engine.stop("서비스가 종료되었습니다.")
         capture.stopCapture()
@@ -288,6 +393,8 @@ class MacroForegroundService : Service() {
         const val ACTION_PAUSE_MACRO = "com.macromobile.imagemacro.PAUSE_MACRO"
         const val ACTION_RESUME_MACRO = "com.macromobile.imagemacro.RESUME_MACRO"
         const val ACTION_SHUTDOWN = "com.macromobile.imagemacro.SHUTDOWN"
+        const val ACTION_START_RECORDING = "com.macromobile.imagemacro.START_RECORDING"
+        const val ACTION_STOP_RECORDING = "com.macromobile.imagemacro.STOP_RECORDING"
 
         private const val EXTRA_RESULT_CODE = "result_code"
         private const val EXTRA_RESULT_DATA = "result_data"
@@ -331,6 +438,14 @@ object MacroController {
     private val _serviceError = MutableStateFlow<String?>(null)
     val serviceError: StateFlow<String?> = _serviceError.asStateFlow()
 
+    /** 녹화 중인지, 지금까지 몇 개를 기록했는지, 어느 매크로에 붙일지. */
+    private val _recording = MutableStateFlow(RecordingUiState())
+    val recording: StateFlow<RecordingUiState> = _recording.asStateFlow()
+
+    /** 녹화 결과처럼 오류가 아닌 알림. */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice.asStateFlow()
+
     private val _status = MutableStateFlow(MacroStatus())
 
     /** 서비스가 없을 때도 안전하게 관찰할 수 있는 상태. */
@@ -348,6 +463,7 @@ object MacroController {
     }
 
     internal fun detach() {
+        _recording.value = RecordingUiState()
         relayScope?.cancel()
         relayScope = null
         _engine.value = null
@@ -358,6 +474,25 @@ object MacroController {
     fun reportError(message: String?) {
         _serviceError.value = message
     }
+
+    fun reportRecording(message: String?) {
+        _notice.value = message
+    }
+
+    fun clearNotice() {
+        _notice.value = null
+    }
+
+    internal fun setRecording(active: Boolean, count: Int, macroName: String) {
+        _recording.value = RecordingUiState(active, count, macroName)
+    }
+
+    fun startRecording(context: Context) = send(context, MacroForegroundService.ACTION_START_RECORDING)
+
+    fun stopRecording(context: Context) = send(context, MacroForegroundService.ACTION_STOP_RECORDING)
+
+    private fun send(context: Context, action: String) =
+        MacroForegroundService.send(context, action)
 
     val isCaptureReady: Boolean get() = _capture.value?.active?.value == true
 
@@ -380,3 +515,10 @@ object MacroController {
     fun clearTargetFound() = _engine.value?.clearTargetFound()
     fun clearError() = _engine.value?.clearError()
 }
+
+/** 화면에 보여줄 녹화 상태. */
+data class RecordingUiState(
+    val active: Boolean = false,
+    val count: Int = 0,
+    val macroName: String = "",
+)

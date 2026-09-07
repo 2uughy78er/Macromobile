@@ -60,6 +60,13 @@ class MacroViewModel(app: Application) : AndroidViewModel(app) {
 
     val serviceError: StateFlow<String?> = MacroController.serviceError
 
+    /** 동작 녹화 상태. */
+    val recording: StateFlow<com.macromobile.imagemacro.service.RecordingUiState> =
+        MacroController.recording
+
+    /** 녹화 결과처럼 오류가 아닌 알림. */
+    val notice: StateFlow<String?> = MacroController.notice
+
     private val _permissions = MutableStateFlow(PermissionState())
     val permissions: StateFlow<PermissionState> = _permissions.asStateFlow()
 
@@ -447,6 +454,35 @@ class MacroViewModel(app: Application) : AndroidViewModel(app) {
             if (error != null) showMessage(error)
         }
     }
+
+    /**
+     * 내가 하는 터치·드래그를 녹화해 매크로 단계로 만든다.
+     *
+     * @return 녹화를 실제로 시작했으면 true. 권한이 모자라면 안내만 하고 false 를 돌려준다.
+     *   (false 인데 앱을 내려버리면 안내 문구를 볼 수 없다.)
+     */
+    fun startRecording(): Boolean {
+        refreshPermissions()
+        val perms = _permissions.value
+        if (!perms.accessibilityEnabled) {
+            showMessage("접근성 서비스를 먼저 켜주세요. 녹화한 터치를 앱에 전달하려면 필요합니다.")
+            return false
+        }
+        if (!perms.captureReady) {
+            showMessage("화면 캡처를 먼저 허용해주세요. 녹화 기능도 이 서비스 위에서 동작합니다.")
+            return false
+        }
+        if (!perms.overlayGranted) {
+            showMessage("'다른 앱 위에 표시' 권한이 필요합니다. 권한 설정에서 허용해주세요.")
+            return false
+        }
+        MacroController.startRecording(getApplication())
+        return true
+    }
+
+    fun stopRecording() = MacroController.stopRecording(getApplication())
+
+    fun clearNotice() = MacroController.clearNotice()
 
     fun pauseMacro() = MacroController.pause()
     fun resumeMacro() = MacroController.resume()

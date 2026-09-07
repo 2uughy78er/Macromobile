@@ -91,8 +91,12 @@ class StepExecutor(
         if (frame == null) return StepOutcome.Abort("'$label' 단계: ${error ?: "화면을 가져오지 못했습니다."}")
         val mapper = detector.mapperFor(ctx.macro, frame)
         val (x, y) = mapper.toScreen(point)
-        ctx.log("$label: (${point.x}, ${point.y}) 터치")
-        return tapAt(ctx, x, y, label)
+        if (step.tapHoldMs > 0) {
+            ctx.log("$label: (${point.x}, ${point.y}) ${step.tapHoldMs}ms 길게 누르기")
+        } else {
+            ctx.log("$label: (${point.x}, ${point.y}) 터치")
+        }
+        return tapAt(ctx, x, y, label, step.tapHoldMs)
     }
 
     private suspend fun doWaitForImage(
@@ -488,9 +492,11 @@ class StepExecutor(
         x: Int,
         y: Int,
         label: String,
+        holdMs: Long = 0L,
     ): StepOutcome {
         gestures.jitterPx = ctx.settings.tapJitterPx
-        return when (val r = gestures.tap(x, y)) {
+        val hold = if (holdMs > 0) holdMs.coerceAtMost(10_000L) else DEFAULT_TAP_HOLD_MS
+        return when (val r = gestures.tap(x, y, hold)) {
             is GestureOutcome.Success -> StepOutcome.Continue
             is GestureOutcome.Failed -> StepOutcome.Abort("'$label' 단계: ${r.reason}")
         }
@@ -571,6 +577,9 @@ class StepExecutor(
         /** 좌표 터치처럼 최신 화면이 꼭 필요하지 않을 때 재사용할 프레임 나이. */
         const val FRESH_ENOUGH_MS = 400L
         const val DEFAULT_IF_FOUND_TIMEOUT_MS = 2_000L
+
+        /** 길게 누르기를 지정하지 않은 보통 터치를 누르고 있는 시간. */
+        const val DEFAULT_TAP_HOLD_MS = 60L
 
         /** 단발 캡처가 일시적으로 실패했을 때의 재시도 횟수와 간격. */
         const val SINGLE_CAPTURE_ATTEMPTS = 6
