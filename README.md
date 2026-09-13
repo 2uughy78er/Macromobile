@@ -75,6 +75,56 @@ TARGET에 그려지는 선은 시늉이 아니라 **시스템이 실제로 전�
 09:31:02.417  ACTION_MOVE  540,960  TARGET 1: 1080,240 | TARGET 2: 270,1200  18ms  SUCCESS
 ```
 
+## 크래시가 나면 — 진단 화면
+
+앱이 죽으면 그 순간의 보고서가 기기 안에 파일로 남습니다. 다음에 앱을 켜면 메인 화면
+맨 위에 알림이 뜨고, **진단 · 크래시 기록** 에서 전체를 볼 수 있습니다. PC나 ADB 없이
+기기만으로 원인을 확인할 수 있습니다.
+
+보고서에 들어 있는 것: 시각 / 스레드 / 컴포넌트 / 마지막 단계 / 예외 클래스 / 예외 메시지
+/ 스택 트레이스 / 기기 / OS 버전.
+
+**크래시를 숨기지 않습니다.** 기록기는 보고서를 남긴 뒤 원래 핸들러에 그대로 넘기므로
+앱은 평소처럼 죽습니다. 예외를 삼켜 억지로 화면을 띄우면 원인이 가려지고, 그 화면은
+어차피 믿을 수 없기 때문입니다.
+
+### 단계 기록
+
+테스트 화면이 열리기까지 거치는 단계가 모두 기록됩니다.
+
+```
+TEST_SCREEN_CLICK → TEST_SCREEN_NAVIGATION_START → TEST_SCREEN_ACTIVITY_CREATE
+→ TEST_SCREEN_COMPOSE_START → ACCESSIBILITY_SERVICE_CHECK → DISPLAY_METRICS_READ
+→ WINDOW_METRICS_READ → OVERLAY_INITIALIZE → GESTURE_CONTROLLER_INITIALIZE
+→ TEST_SCREEN_READY
+```
+
+마지막으로 남은 줄이 곧 크래시 직전 지점입니다. 기록할 때마다 파일에 바로 쓰므로
+프로세스가 죽어도 마지막 줄이 남습니다.
+
+## 테스트 화면의 STEP 1~10
+
+예전에는 좌표 변환·제스처 전송기·오버레이 뷰·로그를 테스트 화면 하나에서 **동시에**
+초기화했습니다. 그래서 그중 하나가 예외를 던지면 화면이 통째로 죽었고, 무엇이 죽였는지
+알 길이 없었습니다. 이제 단계로 쪼개 하나씩 켭니다. 각 단계는 아래 단계를 포함합니다.
+
+| STEP | 켜지는 것 |
+|---|---|
+| 1 | 빈 테스트 화면 (Compose 만) |
+| 2 | 접근성 서비스 상태 확인 |
+| 3 | DisplayMetrics 읽기 |
+| 4 | WindowMetrics · 인셋 읽기 |
+| 5 | 테스트 뷰 생성 (그리지 않음) |
+| 6 | 4분할 영역 그리기 |
+| 7 | 화면 좌표 변환 (View → Screen) |
+| 8 | MASTER 터치 수집 (주입 없음) |
+| 9 | 제스처 전송기 + TARGET 1개 |
+| 10 | TARGET 3개 전체 (최종 형태) |
+
+기본은 STEP 10 입니다. 죽으면 한 단계씩 내려가며 범인을 좁힙니다.
+
+---
+
 ## 전송 방식 두 가지
 
 | 방식 | 동작 | 쓰임 |
@@ -138,6 +188,11 @@ app/src/main/java/com/macromobile/inputmirror/
 │   ├─ MirrorPathPlanner.kt      경로 계산 (순수 로직, 테스트로 고정)
 │   ├─ GestureDispatcher.kt      큐 + 순서 보장 + 다중 스트로크 전송
 │   └─ InputEvent.kt             TouchPoint, TouchStroke, MirrorRecord
+├─ diag/
+│   ├─ DiagStage.kt              단계 이름 (TEST_SCREEN_CLICK … TEST_SCREEN_READY)
+│   ├─ DiagLog.kt                단계 기록 + 파일 저장
+│   ├─ CrashRecorder.kt          크래시 보고서 (막지 않고 기록만)
+│   └─ TestStep.kt               STEP 1~10 구분
 ├─ service/     MirrorAccessibilityService (입력 주입 전담)
 ├─ storage/     SettingsRepository, MirrorLogStore
 └─ ui/          MainScreen, MirrorTestScreen, SettingsScreen, LogScreen, PermissionScreen
@@ -152,6 +207,21 @@ debug 서명 키를 저장소에 고정해 두었으므로, 새 APK는 **앱을 
 됩니다. 빌드 로그의 `Print debug APK signing fingerprint` 단계에서 지문을 확인할 수 있습니다.
 
 ---
+
+## 컨텍스트 주의 (Android 11+ / Android 16)
+
+`Context.getDisplay()` 와 `WindowManager.getCurrentWindowMetrics()` 는 **디스플레이에
+연결된 컨텍스트**에서만 쓸 수 있습니다. Activity, `createWindowContext()`,
+`createDisplayContext()` 로 만든 것이 여기 해당합니다. Application 컨텍스트로 부르면
+`UnsupportedOperationException` 이 납니다.
+
+이 앱은 한때 `EnvironmentInfo.collect()` 에 Application 컨텍스트를 넘겨 테스트 화면이
+열리자마자 죽었습니다. 지금은 그 함수가 **컨텍스트를 받지 않고 View 만 받습니다.**
+View 의 컨텍스트는 언제나 Activity 이므로 같은 실수를 할 수 없습니다. 회전값도
+`Context.getDisplay()` 대신 `View.getDisplay()` 로 읽습니다 — 이쪽은 예외 대신 null 을
+줍니다.
+
+새 코드에서 화면·창 정보를 읽을 일이 생기면 **반드시 View 나 Activity 를 통해** 읽으세요.
 
 ## 사용 책임
 
