@@ -25,10 +25,20 @@ data class MirrorRegion(
     /** 자동 인식으로 찾았을 때의 패키지명. 수동 지정이면 null. */
     val packageName: String? = null,
 ) {
+    /** 좌표가 쓸 만한가. **의도와 별개다.** */
     val isUsable: Boolean get() = bounds.isUsable()
 
-    /** 입력을 실제로 보낼 대상인가. */
-    val isActive: Boolean get() = enabled && deliverInput && isUsable
+    /**
+     * 사용자가 이 대상에 입력을 보내려는 의도가 있는가.
+     *
+     * 좌표가 쓸 만한지는 **여기서 보지 않는다.** 둘을 섞으면 잘못 지정된 영역이 목록에서
+     * 조용히 빠져버려, 사용자는 왜 입력이 안 가는지 알 수 없게 된다. 의도는 의도대로 두고,
+     * 좌표 문제는 [MirrorLayout.status] 가 이유를 붙여 따로 알린다.
+     */
+    val isActive: Boolean get() = enabled && deliverInput
+
+    /** 실제로 입력을 보낼 수 있는 상태인가. */
+    val isDeliverable: Boolean get() = isActive && isUsable
 }
 
 /**
@@ -98,8 +108,11 @@ data class MirrorLayout(
     /** 이 좌표들이 만들어진 화면 조건. */
     val screen: ScreenFingerprint = ScreenFingerprint(),
 ) {
-    /** 실제로 입력을 보낼 대상들. 순서는 목록 순서 그대로다. */
+    /** 사용자가 켜 둔 대상들. 좌표가 잘못돼 있어도 빠지지 않는다(이유를 알려야 하므로). */
     val activeTargets: List<MirrorRegion> get() = targets.filter { it.isActive }
+
+    /** 지금 실제로 입력을 보낼 수 있는 대상들. 전송기는 이쪽을 쓴다. */
+    val deliverableTargets: List<MirrorRegion> get() = targets.filter { it.isDeliverable }
 
     val hasAnyRegion: Boolean get() = master != null || targets.isNotEmpty()
 

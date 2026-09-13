@@ -96,10 +96,15 @@ class MirrorLayoutTest {
     }
 
     @Test
-    fun `너무 작은 영역은 지정 실수로 본다`() {
+    fun `잘못 지정된 영역은 조용히 빠지지 않고 이유가 나온다`() {
         val tiny = layout().withTarget(region("target_1", 10, 10, 30, 30))
+        // 켜 둔 대상 목록에는 그대로 남는다. 사라지면 왜 안 되는지 알 수 없다.
+        assertEquals(3, tiny.activeTargets.size)
+        // 하지만 실제로 보낼 수 있는 대상에서는 빠지고, 상태가 이유를 말해준다.
+        assertEquals(2, tiny.deliverableTargets.size)
         val status = tiny.status(screen)
         assertTrue(status is LayoutStatus.TargetTooSmall)
+        assertTrue(status.reason.contains("너무 작습니다"))
     }
 
     @Test
@@ -166,7 +171,7 @@ class MirrorLayoutTest {
             master = region("master", 0, 0, 800, 600),
             targets = listOf(
                 region("target_1", 800, 0, 1800, 750),
-                region("target_2", 0, 700, 1200, 1500),
+                region("target_2", 0, 800, 1200, 1600),
                 region("target_3", 1300, 800, 2200, 1700),
             ),
             screen = ScreenFingerprint(2400, 1800, 0),
