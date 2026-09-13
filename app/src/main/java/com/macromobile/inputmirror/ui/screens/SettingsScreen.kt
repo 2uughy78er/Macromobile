@@ -27,12 +27,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.macromobile.inputmirror.model.DispatchMode
 import com.macromobile.inputmirror.model.FitMode
 import com.macromobile.inputmirror.model.MirrorMode
+import com.macromobile.inputmirror.MirrorApp
+import com.macromobile.inputmirror.model.MirrorLayout
 import com.macromobile.inputmirror.model.MirrorSettings
 import com.macromobile.inputmirror.ui.MirrorViewModel
 
 @Composable
 fun SettingsScreen(viewModel: MirrorViewModel, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val capability by viewModel.capability.collectAsStateWithLifecycle()
+    val layout by MirrorApp.container().layoutRepository.layout
+        .collectAsStateWithLifecycle(initialValue = MirrorLayout())
 
     // dp → px 환산은 반드시 실제 화면 밀도를 거친다. 픽셀 상수를 직접 쓰지 않는다.
     val density = LocalDensity.current.density
@@ -96,6 +101,65 @@ fun SettingsScreen(viewModel: MirrorViewModel, onBack: () -> Unit) {
                 Text(
                     "어느 방식이 실제로 통하는지 성공률로 비교하세요. " +
                         "MODE A 부터 확인하는 것이 순서입니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            SectionCard(
+                title = "동시 입력과 지연",
+                subtitle = "이 설정이 무엇을 보장하고 무엇을 보장하지 않는지.",
+            ) {
+                Text(
+                    "대상별 지연을 0ms 로 두어도 **하드웨어 수준의 완전한 동시 입력을 " +
+                        "의미하지 않습니다.** 한 제스처에 손가락 여러 개를 담아 보내지만, " +
+                        "시스템이 그것을 언제 어떤 순서로 풀어 각 창에 전달하는지는 앱이 " +
+                        "정할 수 없습니다.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "실제로 어느 방식이 이 기기에서 통하는지는 홈 화면의 '동시 주입 측정' " +
+                        "으로 숫자를 내어 확인하세요. 그 숫자가 나오기 전까지는 동시 입력이 " +
+                        "된다고 가정하지 않습니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            SectionCard(
+                title = "멀티터치",
+                subtitle = "지금 이 방식에서 실제로 가능한 범위.",
+            ) {
+                val maxStrokes = capability.maxStrokeCount
+                val targetCount = (layout.deliverableTargets.size +
+                    (if (layout.master != null) 1 else 0)).coerceAtLeast(1)
+                Text(
+                    "단일 터치: 지원\n끌기 / 스와이프: 지원\n멀티터치(손가락 2개 이상): 지원하지 않습니다.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                if (maxStrokes > 0) {
+                    Text(
+                        "이 기기는 한 제스처에 최대 ${maxStrokes}개의 스트로크를 담을 수 " +
+                            "있습니다. 대상 하나당 손가락 하나가 스트로크 하나를 쓰므로, " +
+                            "지금 대상 ${targetCount}개 기준으로 동시에 보낼 수 있는 손가락은 " +
+                            "최대 ${maxStrokes / targetCount}개입니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        "접근성 서비스를 켜면 이 기기의 실제 스트로크 한계를 확인할 수 있습니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "입력을 받는 오버레이가 지금은 손가락 하나만 따라갑니다. 스트로크 예산이 " +
+                        "남더라도 여러 손가락을 동시에 기록하지 않으므로, 되는 척하지 않고 " +
+                        "미지원이라고 적어 둡니다.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
