@@ -15,6 +15,7 @@ import com.macromobile.inputmirror.input.TraceStage
 import com.macromobile.inputmirror.model.LayoutStatus
 import com.macromobile.inputmirror.model.MirrorLayout
 import com.macromobile.inputmirror.model.MirrorSettings
+import com.macromobile.inputmirror.overlay.FloatingControlView
 import com.macromobile.inputmirror.overlay.MasterInputView
 import com.macromobile.inputmirror.service.MirrorAccessibilityService
 import com.macromobile.inputmirror.storage.MirrorLogStore
@@ -68,6 +69,11 @@ class MirrorEngine(
     private var layout: MirrorLayout = MirrorLayout()
     private var settings: MirrorSettings = MirrorSettings()
     private var masterView: MasterInputView? = null
+    private var floatingView: FloatingControlView? = null
+
+    /** 떠 있는 조작 버튼의 위치. 사용자가 옮긴 자리를 기억한다. */
+    private var floatingX = 0
+    private var floatingY = 0
 
     /** 이번 제스처에서 각 대상에 주입하려던 경로의 시작·끝. 로그에 쓴다. */
     private var plannedPaths: Map<String, String> = emptyMap()
@@ -113,7 +119,9 @@ class MirrorEngine(
         tracer.reset()
         recognizer.reset()
         dispatcher.start()
+        showFloatingControl()
         MirrorRuntime.setState(MirrorState.RUNNING)
+        floatingView?.state = MirrorState.RUNNING
         MirrorRuntime.addLog("START — 대상 ${dispatcher.targets.size}개")
         return true
     }
@@ -124,6 +132,7 @@ class MirrorEngine(
         // 진행 중인 제스처는 확정하지 않고 버린다. 절반만 보내면 대상이 이상해진다.
         recognizer.onCancel()?.let { dispatcher.submitCancel(it.id) }
         MirrorRuntime.setState(MirrorState.PAUSED)
+        floatingView?.state = MirrorState.PAUSED
         masterView?.statusText = "일시정지"
         masterView?.active = false
         MirrorRuntime.addLog("PAUSE")
@@ -132,6 +141,7 @@ class MirrorEngine(
     fun resume() {
         if (state != MirrorState.PAUSED) return
         MirrorRuntime.setState(MirrorState.RUNNING)
+        floatingView?.state = MirrorState.RUNNING
         masterView?.active = true
         masterView?.statusText = null
         MirrorRuntime.addLog("RESUME")
@@ -142,6 +152,7 @@ class MirrorEngine(
         dispatcher.stop()
         logStore.stopSession()
         hideMasterOverlay()
+        hideFloatingControl()
         MirrorRuntime.setState(MirrorState.STOPPED)
         MirrorRuntime.addLog("STOP")
     }
@@ -252,6 +263,47 @@ class MirrorEngine(
 
     private fun setMasterOverlayTouchable(touchable: Boolean) {
         service.overlay?.setTouchable(KEY_MASTER_INPUT, touchable)
+    }
+
+    /**
+     * 떠 있는 조작 버튼.
+     *
+     * 사용자가 게임 안에 있을 때도 즉시 멈출 수 있어야 하므로, 우리 화면이 아니라
+     * 오버레이로 띄운다. 화면을 덮지 않는 작은 버튼 하나다.
+     */
+    private fun showFloatingControl() {
+        val controller = service.overlay ?: return
+        if (floatingX == 0 && floatingY == 0) {
+            val screen = controller.screenFingerprint()
+            floatingX = (screen.width * 0.55f).toInt()
+            floatingY = (screen.height * 0.02f).toInt()
+        }
+        val view = FloatingControlView(
+            context = service,
+            onPauseOrResume = {
+                if (MirrorRuntime.state.value == MirrorState.PAUSED) resume() else pause()
+            },
+            onStop = { stop() },
+            onMoved = { dx, dy ->
+                floatingX += dx
+                floatingY += dy
+                service.overlay?.update(KEY_FLOATING_CONTROL) { params ->
+                    params.x = floatingX
+                    params.y = floatingY
+                }
+            },
+        )
+        floatingView = view
+        controller.show(
+            KEY_FLOATING_CONTROL,
+            view,
+            controller.floatingParams(floatingX, floatingY),
+        )
+    }
+
+    private fun hideFloatingControl() {
+        service.overlay?.remove(KEY_FLOATING_CONTROL)
+        floatingView = null
     }
 
     // ------------------------------------------------------------------
@@ -368,5 +420,6 @@ class MirrorEngine(
     companion object {
         private const val TAG = "MirrorEngine"
         const val KEY_MASTER_INPUT = "master_input"
+        const val KEY_FLOATING_CONTROL = "floating_control"
     }
 }

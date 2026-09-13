@@ -49,6 +49,7 @@ fun MainScreen(
     onOpenSettings: () -> Unit,
     onOpenPermission: () -> Unit,
     onOpenDiag: () -> Unit = {},
+    onBack: (() -> Unit)? = null,
 ) {
     val capability by viewModel.capability.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -70,7 +71,7 @@ fun MainScreen(
     Scaffold(
         modifier = Modifier.windowInsetsPadding(WindowInsets.systemBars),
         topBar = {
-            MirrorTopBar("Input Mirror") {
+            MirrorTopBar("테스트 모드", onBack = onBack) {
                 IconButton(onClick = onOpenLog) {
                     Icon(Icons.Default.Article, contentDescription = "로그")
                 }

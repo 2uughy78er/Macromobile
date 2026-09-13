@@ -78,6 +78,9 @@ object MirrorRuntime {
         _failures.value = (_failures.value + failure).takeLast(MAX_FAILURES)
     }
 
+    /** 엔진 밖(화면 등)에서 실패를 남길 때. 기록되는 곳은 한 군데뿐이어야 한다. */
+    fun addFailureExternal(failure: MirrorFailure) = addFailure(failure)
+
     internal fun addLog(line: String) {
         _gestureLog.value = (_gestureLog.value + line).takeLast(MAX_LOG)
     }

@@ -9,6 +9,7 @@ import androidx.navigation.compose.rememberNavController
 import com.macromobile.inputmirror.diag.DiagLog
 import com.macromobile.inputmirror.diag.DiagStage
 import com.macromobile.inputmirror.ui.screens.DiagScreen
+import com.macromobile.inputmirror.ui.screens.HomeScreen
 import com.macromobile.inputmirror.ui.screens.LogScreen
 import com.macromobile.inputmirror.ui.screens.MainScreen
 import com.macromobile.inputmirror.ui.screens.MirrorTestScreen
@@ -16,6 +17,7 @@ import com.macromobile.inputmirror.ui.screens.PermissionScreen
 import com.macromobile.inputmirror.ui.screens.SettingsScreen
 
 object Routes {
+    const val HOME = "home"
     const val MAIN = "main"
     const val TEST = "test"
     const val LOG = "log"
@@ -29,8 +31,19 @@ private const val NAV_COMPONENT = "AppNavigation"
 @Composable
 fun AppNavigation(navController: NavHostController = rememberNavController()) {
     val viewModel: MirrorViewModel = viewModel()
+    val setupViewModel: SetupViewModel = viewModel()
 
-    NavHost(navController = navController, startDestination = Routes.MAIN) {
+    NavHost(navController = navController, startDestination = Routes.HOME) {
+        composable(Routes.HOME) {
+            HomeScreen(
+                viewModel = setupViewModel,
+                onOpenTestMode = { navController.navigate(Routes.MAIN) },
+                onOpenLog = { navController.navigate(Routes.LOG) },
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                onOpenPermission = { navController.navigate(Routes.PERMISSION) },
+                onOpenDiag = { navController.navigate(Routes.DIAG) },
+            )
+        }
         composable(Routes.MAIN) {
             MainScreen(
                 viewModel = viewModel,
@@ -47,6 +60,7 @@ fun AppNavigation(navController: NavHostController = rememberNavController()) {
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 onOpenPermission = { navController.navigate(Routes.PERMISSION) },
                 onOpenDiag = { navController.navigate(Routes.DIAG) },
+                onBack = { navController.popBackStack() },
             )
         }
         composable(Routes.TEST) {
