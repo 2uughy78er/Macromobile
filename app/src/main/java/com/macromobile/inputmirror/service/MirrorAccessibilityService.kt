@@ -7,6 +7,12 @@ import android.content.Context
 import android.provider.Settings
 import android.text.TextUtils
 import android.util.Log
+import android.view.View
+import com.macromobile.inputmirror.model.MirrorRegion
+import com.macromobile.inputmirror.model.Region
+import com.macromobile.inputmirror.model.ScreenFingerprint
+import com.macromobile.inputmirror.overlay.OverlayController
+import com.macromobile.inputmirror.overlay.RegionEditorView
 import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -49,16 +55,26 @@ sealed interface DispatchResult {
  */
 class MirrorAccessibilityService : AccessibilityService() {
 
+    /**
+     * 오버레이 창 관리자.
+     *
+     * 서비스가 실제로 연결된 뒤에만 만든다. 그 전에는 창을 띄울 수 있는 컨텍스트가 없다.
+     */
+    var overlay: OverlayController? = null
+        private set
+
     override fun onServiceConnected() {
         super.onServiceConnected()
+        overlay = OverlayController(this)
         serviceInfo = (serviceInfo ?: AccessibilityServiceInfo()).apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             flags = flags or AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
             notificationTimeout = 100
         }
+        screenFlow.value = overlay?.screenFingerprint() ?: ScreenFingerprint()
         instanceFlow.value = this
-        Log.i(TAG, "접근성 서비스 연결됨")
+        Log.i(TAG, "접근성 서비스 연결됨 · 화면 ${screenFlow.value.describe()}")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -70,15 +86,74 @@ class MirrorAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
+        overlay?.removeAll()
+        overlay = null
         instanceFlow.value = null
         Log.i(TAG, "접근성 서비스 연결 해제")
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        overlay?.removeAll()
+        overlay = null
         instanceFlow.value = null
         super.onDestroy()
     }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // 회전하거나 멀티윈도우 크기가 바뀌면 저장된 좌표는 더 이상 같은 곳을 가리키지
+        // 않는다. 여기서 조용히 고치지 않고, 바뀐 사실만 알린다. 어떻게 할지는
+        // 배치를 들고 있는 쪽이 사용자에게 물어 정한다.
+        screenFlow.value = overlay?.screenFingerprint() ?: ScreenFingerprint()
+        Log.i(TAG, "화면 구성 변경: ${screenFlow.value.describe()}")
+    }
+
+    // ------------------------------------------------------------------
+    // 영역 지정 오버레이
+    // ------------------------------------------------------------------
+
+    /**
+     * 화면 위에 영역 지정 오버레이를 띄운다.
+     *
+     * 게임 위에 그대로 덮이므로 사용자가 실제 화면을 보면서 영역을 그릴 수 있다.
+     */
+    fun showRegionEditor(
+        editingName: String,
+        existing: List<MirrorRegion>,
+        initial: Region?,
+        onConfirm: (Region) -> Unit,
+        onCancel: () -> Unit,
+    ): Boolean {
+        val controller = overlay ?: return false
+        val view: View = RegionEditorView(
+            context = this,
+            editingName = editingName,
+            existing = existing,
+            candidates = WindowInspector.candidates(this),
+            initial = initial,
+            onConfirm = { region ->
+                hideRegionEditor()
+                onConfirm(region)
+            },
+            onCancel = {
+                hideRegionEditor()
+                onCancel()
+            },
+        )
+        return controller.show(KEY_REGION_EDITOR, view, controller.fullScreenParams())
+    }
+
+    fun hideRegionEditor() {
+        overlay?.remove(KEY_REGION_EDITOR)
+    }
+
+    /** 지금 화면의 창 목록을 사람이 읽을 수 있게. 영역 지정을 도우려고 보여준다. */
+    fun windowDump(): String = WindowInspector.dump(this)
+
+    /** 지금 화면 조건. 저장된 좌표가 아직 유효한지 대조하는 데 쓴다. */
+    fun screenFingerprint(): ScreenFingerprint =
+        overlay?.screenFingerprint() ?: ScreenFingerprint()
 
     /**
      * 제스처를 보내고 끝날 때까지 기다린다.
@@ -130,7 +205,13 @@ class MirrorAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "MirrorA11yService"
 
+        const val KEY_REGION_EDITOR = "region_editor"
+
         private val instanceFlow = MutableStateFlow<MirrorAccessibilityService?>(null)
+
+        /** 화면 구성이 바뀔 때마다 갱신된다. 배치 유효성 검사가 이 값을 본다. */
+        private val screenFlow = MutableStateFlow(ScreenFingerprint())
+        val screen: StateFlow<ScreenFingerprint> = screenFlow.asStateFlow()
 
         val instance: MirrorAccessibilityService? get() = instanceFlow.value
         val connected: StateFlow<MirrorAccessibilityService?> = instanceFlow.asStateFlow()

@@ -1,11 +1,14 @@
 package com.macromobile.inputmirror.model
 
+import kotlinx.serialization.Serializable
+
 /**
  * 화면 위의 사각 영역(실제 화면 픽셀).
  *
- * MVP 에서는 앱 안의 테스트 영역을 가리키지만, 본 프로젝트에서는 분할화면에 떠 있는
- * 각 게임 창의 영역을 그대로 담게 된다. 그래서 처음부터 "창 영역"으로 다룬다.
+ * 테스트 모드에서는 앱 안의 테스트 영역을, 본 모드에서는 분할화면에 떠 있는 각 게임 창의
+ * 영역을 담는다. 본 모드의 좌표는 **언제나 화면(디스플레이) 좌표**다.
  */
+@Serializable
 data class Region(
     val left: Int,
     val top: Int,
@@ -21,8 +24,34 @@ data class Region(
     fun contains(x: Float, y: Float): Boolean =
         x >= left && x < right && y >= top && y < bottom
 
+    /** 이 영역을 화면 안으로 가둔다. 화면 밖 좌표를 주입하면 엉뚱한 곳이 눌린다. */
+    fun clampInto(screenWidth: Int, screenHeight: Int): Region = Region(
+        left = left.coerceIn(0, screenWidth),
+        top = top.coerceIn(0, screenHeight),
+        right = right.coerceIn(0, screenWidth),
+        bottom = bottom.coerceIn(0, screenHeight),
+    )
+
+    /** 다른 영역과 겹치는가. 영역이 서로 겹치면 주입이 엉뚱한 창으로 간다. */
+    fun overlaps(other: Region): Boolean =
+        left < other.right && other.left < right && top < other.bottom && other.top < bottom
+
+    /** 최소 크기를 넘는가. 너무 작으면 좌표 변환의 의미가 없다. */
+    fun isUsable(minSide: Int = MIN_SIDE): Boolean = width >= minSide && height >= minSide
+
     companion object {
         val EMPTY = Region(0, 0, 0, 0)
+
+        /** 영역으로 인정하는 최소 한 변(픽셀). 이보다 작으면 지정 실수로 본다. */
+        const val MIN_SIDE = 48
+
+        /** 두 점으로 만든다. 어느 쪽이 먼저 찍혔든 정규화한다. */
+        fun fromPoints(x1: Float, y1: Float, x2: Float, y2: Float) = Region(
+            left = minOf(x1, x2).toInt(),
+            top = minOf(y1, y2).toInt(),
+            right = maxOf(x1, x2).toInt(),
+            bottom = maxOf(y1, y2).toInt(),
+        )
 
         fun of(left: Number, top: Number, width: Number, height: Number) = Region(
             left = left.toInt(),
