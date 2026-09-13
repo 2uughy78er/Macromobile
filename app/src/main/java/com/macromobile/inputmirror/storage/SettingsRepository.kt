@@ -29,6 +29,10 @@ class SettingsRepository(private val context: Context) {
             prefs[KEY_DISPATCH_MODE] = next.dispatchMode.name
             prefs[KEY_DELAY] = next.inputDelayMs.coerceIn(0L, 1_000L)
             prefs[KEY_FIT] = next.fitMode.name
+            prefs[KEY_DRAG_THRESHOLD_DP] = next.dragThresholdDp.coerceIn(
+                MirrorSettings.MIN_DRAG_THRESHOLD_DP,
+                MirrorSettings.MAX_DRAG_THRESHOLD_DP,
+            )
             prefs[KEY_TARGETS] = next.enabledTargets.joinToString(",") { it.toString() }
             prefs[KEY_SCALE_X] = next.scaleX.coerceIn(0.1f, 5f)
             prefs[KEY_SCALE_Y] = next.scaleY.coerceIn(0.1f, 5f)
@@ -45,6 +49,8 @@ class SettingsRepository(private val context: Context) {
             .getOrDefault(DispatchMode.COMBINED),
         inputDelayMs = this[KEY_DELAY] ?: 0L,
         fitMode = runCatching { FitMode.valueOf(this[KEY_FIT] ?: "") }.getOrDefault(FitMode.FIT),
+        dragThresholdDp = this[KEY_DRAG_THRESHOLD_DP]
+            ?: MirrorSettings.DEFAULT_DRAG_THRESHOLD_DP,
         enabledTargets = (this[KEY_TARGETS] ?: "true,true,true")
             .split(",").map { it.trim().toBoolean() }
             .let { if (it.size == 3) it else listOf(true, true, true) },
@@ -60,6 +66,7 @@ class SettingsRepository(private val context: Context) {
         val KEY_DISPATCH_MODE = stringPreferencesKey("dispatch_mode")
         val KEY_DELAY = longPreferencesKey("input_delay_ms")
         val KEY_FIT = stringPreferencesKey("fit_mode")
+        val KEY_DRAG_THRESHOLD_DP = floatPreferencesKey("drag_threshold_dp")
         val KEY_TARGETS = stringPreferencesKey("enabled_targets")
         val KEY_SCALE_X = floatPreferencesKey("scale_x")
         val KEY_SCALE_Y = floatPreferencesKey("scale_y")

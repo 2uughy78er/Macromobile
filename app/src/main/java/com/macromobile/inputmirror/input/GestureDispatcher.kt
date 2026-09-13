@@ -4,7 +4,6 @@ import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.util.Log
 import com.macromobile.inputmirror.model.DispatchMode
-import com.macromobile.inputmirror.model.MirrorMode
 import com.macromobile.inputmirror.service.DispatchResult
 import com.macromobile.inputmirror.service.MirrorAccessibilityService
 import kotlinx.coroutines.CoroutineScope
@@ -25,48 +24,85 @@ data class MirrorTarget(
     val transformer: CoordinateTransformer,
 )
 
+/**
+ * 전송 명령.
+ *
+ * **모든 명령이 gestureId 를 들고 다닌다.** 전송기는 자기가 들고 있는 스트로크가 어느
+ * 제스처의 것인지 확인할 수 있고, 번호가 다르면 물려받지 않고 버린다. 이전 제스처의
+ * 상태가 다음 제스처로 새는 길을 구조적으로 막는다.
+ */
 private sealed interface Command {
-    data class Down(val point: TouchPoint) : Command
-    data class Move(val points: List<TouchPoint>) : Command
-    data class Up(val points: List<TouchPoint>) : Command
-    data class WholeStroke(val points: List<TouchPoint>) : Command
-    data object Cancel : Command
+    val gestureId: Long
+
+    /** 완결된 누르기 하나. 이어붙일 것이 없다. */
+    data class Tap(
+        override val gestureId: Long,
+        val point: TouchPoint,
+        val durationMs: Long,
+    ) : Command
+
+    /** 끌기의 시작. DOWN 부터 임계값을 넘은 지점까지의 경로 **전체**를 담는다. */
+    data class DragOpen(override val gestureId: Long, val points: List<TouchPoint>) : Command
+
+    /** 끌기의 중간 구간. */
+    data class DragContinue(override val gestureId: Long, val points: List<TouchPoint>) : Command
+
+    /** 끌기의 마지막 구간. 여기서 제스처가 닫힌다. */
+    data class DragEnd(override val gestureId: Long, val points: List<TouchPoint>) : Command
+
+    /** 다 끝난 제스처를 한 번에. 완료 후 전송 방식에서 쓴다. */
+    data class Whole(
+        override val gestureId: Long,
+        val points: List<TouchPoint>,
+        val type: GestureType,
+    ) : Command
+
+    data class Cancel(override val gestureId: Long) : Command
 }
 
-/** 대상별로 진행 중인 스트로크와 그 끝점을 함께 들고 있는다. */
+/** 대상 하나에 대해 진행 중인 스트로크와 그 끝점. */
 private class ActiveStroke(
     val stroke: GestureDescription.StrokeDescription,
     /** 이 스트로크가 끝난 지점(화면 좌표). 이어붙일 경로는 **반드시 여기서 시작**해야 한다. */
     val endPoint: MappedPoint,
 )
 
+/** 진행 중인 끌기 한 건. 어느 제스처의 것인지 번호로 못박아 둔다. */
+private class ActiveChain(
+    val gestureId: Long,
+    val strokes: List<ActiveStroke>,
+)
+
 /**
- * 마스터의 터치를 대상들에 주입한다.
+ * 판정이 끝난 제스처를 대상들에 주입한다.
  *
- * 명령을 채널에 넣고 코루틴 하나가 순서대로 꺼내 처리하므로 입력 순서가 바뀌지 않는다.
- * 제스처는 앞의 것이 끝나야 다음을 보낼 수 있어 매 전송의 완료를 기다린다.
+ * ## 이 클래스가 하지 않는 일
  *
- * 좌표는 다음 순서로 옮긴다.
+ * **TAP 인지 DRAG 인지 판단하지 않는다.** 그 판단은 [GestureRecognizer] 가 이동거리만
+ * 보고 내리고, 여기로는 이미 확정된 명령만 들어온다. 예전에는 이 클래스가 들고 있던
+ * "직전 스트로크"의 존재 여부가 사실상 TAP/DRAG 를 결정했고, 그래서 **직전 제스처가
+ * 어떻게 끝났느냐에 따라 이번 터치의 종류가 달라졌다.** 그 구조를 없앤 것이 이 판이다.
+ *
+ * ## 좌표
  * ```
  * 마스터 View 좌표 → (CoordinateTransformer) → 대상 View 좌표
  *                 → (ScreenGeometry)        → 대상 Screen 좌표 → dispatchGesture
  * ```
- * 마지막 단계를 빠뜨리면 View 가 화면 원점에 있지 않은 만큼 어긋난 곳에 주입된다.
  */
 class GestureDispatcher(
     private val scope: CoroutineScope,
     private val tracer: GestureTracer,
     private val onRecord: (MirrorRecord) -> Unit,
+    /** 전송기 내부에서 일어난 일을 사람이 읽을 수 있게 알린다. 숨기지 않기 위한 통로. */
+    private val onNote: (String) -> Unit = {},
 ) {
     private var commands: Channel<Command>? = null
-    private var active: List<ActiveStroke>? = null
-    private val pending = ArrayList<TouchPoint>()
+
+    /** 진행 중인 끌기. 제스처가 끝나거나 다른 제스처가 오면 즉시 버린다. */
+    private var chain: ActiveChain? = null
 
     @Volatile
     var targets: List<MirrorTarget> = emptyList()
-
-    @Volatile
-    var mode: MirrorMode = MirrorMode.STREAMING
 
     @Volatile
     var dispatchMode: DispatchMode = DispatchMode.COMBINED
@@ -87,9 +123,10 @@ class GestureDispatcher(
                 runCatching { handle(command) }.onFailure { error ->
                     // 여기서 삼키면 실패가 화면에 보이지 않는다. 반드시 기록으로 남긴다.
                     Log.e(TAG, "명령 처리 실패", error)
+                    chain = null
                     trace(
                         TraceEntry(
-                            gestureId = 0,
+                            gestureId = command.gestureId,
                             stage = TraceStage.ERROR,
                             elapsedNanos = GestureTracer.now(),
                             phase = TouchPhase.CANCEL,
@@ -106,70 +143,115 @@ class GestureDispatcher(
     fun stop() {
         commands?.close()
         commands = null
-        active = null
-        pending.clear()
+        chain = null
     }
 
-    fun onDown(point: TouchPoint) = send(Command.Down(point))
-    fun onMove(points: List<TouchPoint>) { if (points.isNotEmpty()) send(Command.Move(points)) }
-    fun onUp(points: List<TouchPoint>) = send(Command.Up(points))
-    fun onCancel() = send(Command.Cancel)
-    fun onWholeStroke(points: List<TouchPoint>) = send(Command.WholeStroke(points))
+    // ------------------------------------------------------------------
+    // 판정이 끝난 제스처만 받는다
+    // ------------------------------------------------------------------
+
+    fun submitTap(session: GestureSession) {
+        val point = session.tapPoint()
+        send(Command.Tap(session.id, point, session.durationMs))
+    }
+
+    fun submitDragOpen(session: GestureSession, points: List<TouchPoint>) =
+        send(Command.DragOpen(session.id, points))
+
+    fun submitDragContinue(session: GestureSession, points: List<TouchPoint>) {
+        if (points.isNotEmpty()) send(Command.DragContinue(session.id, points))
+    }
+
+    fun submitDragEnd(session: GestureSession, points: List<TouchPoint>) =
+        send(Command.DragEnd(session.id, points))
+
+    fun submitWholeGesture(outcome: GestureOutcome) {
+        val session = outcome.session
+        when (outcome.type) {
+            GestureType.TAP -> submitTap(session)
+            GestureType.DRAG -> send(
+                Command.Whole(session.id, session.dragPath(), GestureType.DRAG),
+            )
+        }
+    }
+
+    fun submitCancel(gestureId: Long) = send(Command.Cancel(gestureId))
 
     private fun send(command: Command) {
         val channel = commands ?: return
         if (channel.trySend(command).isFailure) Log.w(TAG, "큐에 넣지 못했습니다")
     }
 
+    // ------------------------------------------------------------------
+    // 처리
+    // ------------------------------------------------------------------
+
     private suspend fun handle(command: Command) {
+        // 다른 제스처의 스트로크를 들고 있으면 여기서 버린다. 물려받지 않는다.
+        val held = chain
+        if (held != null && held.gestureId != command.gestureId) {
+            chain = null
+            onNote(
+                "#${held.gestureId} 의 스트로크가 남아 있어 버렸습니다 " +
+                    "(#${command.gestureId} 는 처음부터 새로 만듭니다).",
+            )
+        }
+
         when (command) {
-            is Command.Down -> {
-                pending.clear()
-                active = null
-                if (mode == MirrorMode.STREAMING) {
-                    dispatchSegment(listOf(command.point), TouchPhase.DOWN, willContinue = true)
-                }
+            is Command.Tap -> {
+                chain = null
+                dispatchSegment(
+                    gestureId = command.gestureId,
+                    points = listOf(command.point),
+                    phase = TouchPhase.UP,
+                    type = GestureType.TAP,
+                    willContinue = false,
+                    durationOverrideMs = command.durationMs,
+                )
             }
 
-            is Command.Move -> {
-                if (mode != MirrorMode.STREAMING) return
-                pending += command.points
-                val batch = ArrayList(pending)
-                pending.clear()
-                dispatchSegment(batch, TouchPhase.MOVE, willContinue = true)
+            is Command.DragOpen -> {
+                chain = null
+                dispatchSegment(
+                    command.gestureId, command.points, TouchPhase.DOWN,
+                    GestureType.DRAG, willContinue = true,
+                )
             }
 
-            is Command.Up -> {
-                if (mode != MirrorMode.STREAMING) return
-                val batch = ArrayList(pending).apply { addAll(command.points) }
-                pending.clear()
-                dispatchSegment(batch, TouchPhase.UP, willContinue = false)
-                active = null
+            is Command.DragContinue -> dispatchSegment(
+                command.gestureId, command.points, TouchPhase.MOVE,
+                GestureType.DRAG, willContinue = true,
+            )
+
+            is Command.DragEnd -> {
+                dispatchSegment(
+                    command.gestureId, command.points, TouchPhase.UP,
+                    GestureType.DRAG, willContinue = false,
+                )
+                chain = null
             }
 
-            is Command.WholeStroke -> {
-                active = null
-                dispatchSegment(command.points, TouchPhase.UP, willContinue = false)
+            is Command.Whole -> {
+                chain = null
+                dispatchSegment(
+                    command.gestureId, command.points, TouchPhase.UP,
+                    command.type, willContinue = false,
+                )
             }
 
-            Command.Cancel -> {
-                pending.clear()
-                active = null
-            }
+            is Command.Cancel -> chain = null
         }
     }
 
-    // ------------------------------------------------------------------
-    // 전송
-    // ------------------------------------------------------------------
-
     private suspend fun dispatchSegment(
+        gestureId: Long,
         points: List<TouchPoint>,
         phase: TouchPhase,
+        type: GestureType,
         willContinue: Boolean,
+        durationOverrideMs: Long? = null,
     ) {
         if (points.isEmpty()) return
-        val gestureId = tracer.newGestureId()
         val service = MirrorAccessibilityService.instance
         val currentTargets = targets
         val masterPoint = points.last()
@@ -180,14 +262,14 @@ class GestureDispatcher(
             else -> null
         }
         if (precondition != null || service == null) {
-            fail(gestureId, phase, masterPoint, emptyMap(), precondition ?: "알 수 없음", 0)
+            fail(gestureId, phase, type, masterPoint, emptyMap(), precondition ?: "알 수 없음")
             return
         }
 
         if (inputDelayMs > 0) delay(inputDelayMs)
 
         val plan = buildPlan(points, currentTargets) ?: run {
-            fail(gestureId, phase, masterPoint, emptyMap(), "좌표를 변환하지 못했습니다.", 0)
+            fail(gestureId, phase, type, masterPoint, emptyMap(), "좌표를 변환하지 못했습니다.")
             return
         }
 
@@ -195,17 +277,17 @@ class GestureDispatcher(
         val maxStrokes = MirrorAccessibilityService.maxStrokeCount
         if (dispatchMode == DispatchMode.COMBINED && plan.size > maxStrokes) {
             fail(
-                gestureId, phase, masterPoint, plan.endPoints(), 
+                gestureId, phase, type, masterPoint, plan.endPoints(),
                 "이 기기는 한 제스처에 최대 ${maxStrokes}개 손가락만 담을 수 있습니다. " +
                     "대상이 ${plan.size}개입니다. MODE B(하나씩 차례로)를 써보세요.",
-                0,
             )
             return
         }
 
-        val duration = MirrorPathPlanner.segmentDuration(
-            points, MirrorAccessibilityService.maxGestureDurationMs,
-        )
+        val maxDuration = MirrorAccessibilityService.maxGestureDurationMs
+        val duration = durationOverrideMs
+            ?.coerceIn(MirrorPathPlanner.MIN_SEGMENT_MS, maxDuration.coerceAtLeast(1L))
+            ?: MirrorPathPlanner.segmentDuration(points, maxDuration)
 
         trace(
             TraceEntry(
@@ -221,22 +303,16 @@ class GestureDispatcher(
                 masterScreenY = geometry.toScreenY(masterPoint.y),
                 strokeCount = if (dispatchMode == DispatchMode.COMBINED) plan.size else 1,
                 durationMs = duration,
+                detail = "type=${type.label} points=${points.size}",
             ),
         )
 
-        when (dispatchMode) {
-            DispatchMode.SINGLE -> dispatchGroups(
-                gestureId, phase, masterPoint, listOf(listOf(plan.first())), duration, willContinue,
-            )
-
-            DispatchMode.SEQUENTIAL -> dispatchGroups(
-                gestureId, phase, masterPoint, plan.map { listOf(it) }, duration, willContinue,
-            )
-
-            DispatchMode.COMBINED -> dispatchGroups(
-                gestureId, phase, masterPoint, listOf(plan), duration, willContinue,
-            )
+        val groups = when (dispatchMode) {
+            DispatchMode.SINGLE -> listOf(listOf(plan.first()))
+            DispatchMode.SEQUENTIAL -> plan.map { listOf(it) }
+            DispatchMode.COMBINED -> listOf(plan)
         }
+        dispatchGroups(gestureId, phase, type, masterPoint, groups, duration, willContinue)
     }
 
     /** 대상 하나에 대해 이번 구간에 그릴 화면 좌표 경로. */
@@ -253,10 +329,14 @@ class GestureDispatcher(
      * 대상별 화면 좌표 경로를 만든다.
      *
      * 이어붙이는 구간이면 **직전 스트로크가 끝난 점에서 시작**하도록 맨 앞에 끼워 넣는다.
-     * 시작점이 다르면 시스템이 이어붙이기를 거부한다.
+     * 시작점이 다르면 시스템이 이어붙이기를 거부한다. 들고 있는 스트로크가 이번 제스처의
+     * 것이 아니면 [handle] 에서 이미 버렸으므로 여기서 섞일 일이 없다.
      */
-    private fun buildPlan(points: List<TouchPoint>, currentTargets: List<MirrorTarget>): List<TargetPlan>? {
-        val previous = active
+    private fun buildPlan(
+        points: List<TouchPoint>,
+        currentTargets: List<MirrorTarget>,
+    ): List<TargetPlan>? {
+        val previous = chain?.strokes
         val out = ArrayList<TargetPlan>(currentTargets.size)
         currentTargets.forEachIndexed { index, target ->
             val viewPath = MirrorPathPlanner.mapPath(points, target.transformer) ?: return null
@@ -278,13 +358,14 @@ class GestureDispatcher(
     private suspend fun dispatchGroups(
         gestureId: Long,
         phase: TouchPhase,
+        type: GestureType,
         masterPoint: TouchPoint,
         groups: List<List<TargetPlan>>,
         duration: Long,
         willContinue: Boolean,
     ) {
         val service = MirrorAccessibilityService.instance ?: return
-        val nextActive = arrayOfNulls<ActiveStroke>(targets.size)
+        val nextStrokes = arrayOfNulls<ActiveStroke>(targets.size)
         var allOk = true
         var lastError: String? = null
         val reported = LinkedHashMap<String, MappedPoint>()
@@ -300,7 +381,9 @@ class GestureDispatcher(
                         lineTo(plan.screenPath[i].x, plan.screenPath[i].y)
                     }
                 }
-                val previousStroke = active?.getOrNull(plan.index)?.stroke
+                // 점이 하나뿐이면 moveTo 만 있는 경로가 된다. 공식 문서상 이는
+                // "움직이지 않는 터치" 이고, 그것이 바로 TAP 이다.
+                val previousStroke = chain?.strokes?.getOrNull(plan.index)?.stroke
                 val stroke = try {
                     if (previousStroke != null) {
                         previousStroke.continueStroke(path, 0L, duration, willContinue)
@@ -381,7 +464,7 @@ class GestureDispatcher(
 
             if (result.isSuccess) {
                 builtFor.forEach { (plan, stroke) ->
-                    nextActive[plan.index] = ActiveStroke(stroke, plan.screenPath.last())
+                    nextStrokes[plan.index] = ActiveStroke(stroke, plan.screenPath.last())
                 }
             } else {
                 allOk = false
@@ -389,13 +472,22 @@ class GestureDispatcher(
             }
         }
 
-        active = if (willContinue && allOk) nextActive.toList().filterNotNull()
-            .takeIf { it.size == targets.size } else null
+        // 이어붙일 스트로크는 **이번 제스처 번호와 함께** 보관한다. 다음 제스처가 오면
+        // handle() 첫머리에서 번호가 달라 곧바로 버려진다.
+        chain = if (willContinue && allOk) {
+            nextStrokes.toList().filterNotNull()
+                .takeIf { it.size == targets.size }
+                ?.let { ActiveChain(gestureId, it) }
+        } else {
+            null
+        }
 
         val latency = (System.currentTimeMillis() - masterPoint.timestamp).coerceAtLeast(0L)
         onRecord(
             MirrorRecord(
                 timestamp = System.currentTimeMillis(),
+                gestureId = gestureId,
+                gestureType = type,
                 phase = phase,
                 masterX = masterPoint.x,
                 masterY = masterPoint.y,
@@ -410,10 +502,10 @@ class GestureDispatcher(
     private fun fail(
         gestureId: Long,
         phase: TouchPhase,
+        type: GestureType,
         master: TouchPoint,
         targetPoints: Map<String, MappedPoint>,
         reason: String,
-        latency: Long,
     ) {
         trace(
             TraceEntry(
@@ -429,11 +521,13 @@ class GestureDispatcher(
         onRecord(
             MirrorRecord(
                 timestamp = System.currentTimeMillis(),
+                gestureId = gestureId,
+                gestureType = type,
                 phase = phase,
                 masterX = master.x,
                 masterY = master.y,
                 targets = targetPoints,
-                latencyMs = latency,
+                latencyMs = 0,
                 success = false,
                 error = reason,
             ),

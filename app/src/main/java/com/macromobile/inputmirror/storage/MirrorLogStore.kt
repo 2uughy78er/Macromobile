@@ -38,7 +38,9 @@ class MirrorLogStore(context: Context) {
             File(logDir, "mirror_${fileFormat.format(Date())}.log").also { file ->
                 runCatching {
                     file.appendText("# Input Mirror 검증 로그\n")
-                    file.appendText("# 시각\t단계\t마스터X,Y\t대상별 좌표\t지연(ms)\t결과\n")
+                    file.appendText(
+                        "# 시각\t제스처\t종류\t단계\t마스터X,Y\t대상별 좌표\t지연(ms)\t결과\n",
+                    )
                 }.onFailure { Log.e(TAG, "로그 파일을 만들지 못했습니다", it) }
             }
         } else {
@@ -52,6 +54,20 @@ class MirrorLogStore(context: Context) {
         val file = currentFile ?: return
         runCatching { file.appendText(format(record) + "\n") }
             .onFailure { Log.w(TAG, "로그를 쓰지 못했습니다", it) }
+    }
+
+    /**
+     * 제스처 로그 한 줄을 파일에 그대로 남긴다.
+     *
+     * 판정 과정(DOWN / MOVE 거리 / 상태 전환 / FINAL_TYPE)은 결과 표와 형태가 달라
+     * [MirrorRecord] 에 담지 않는다. 대신 같은 파일에 그대로 적어, 나중에 로그 하나만
+     * 보고도 "왜 이렇게 판정됐는지"를 따라갈 수 있게 한다.
+     */
+    @Synchronized
+    fun note(text: String) {
+        val file = currentFile ?: return
+        runCatching { file.appendText(text + "\n") }
+            .onFailure { Log.w(TAG, "제스처 로그를 쓰지 못했습니다", it) }
     }
 
     @Synchronized
@@ -69,7 +85,8 @@ class MirrorLogStore(context: Context) {
             "$name: ${p.x.toInt()},${p.y.toInt()}"
         }.ifBlank { "-" }
         val result = if (record.success) "SUCCESS" else "FAIL(${record.error ?: "알 수 없음"})"
-        return "${timeFormat.format(Date(record.timestamp))}\t${record.phase.label}\t" +
+        return "${timeFormat.format(Date(record.timestamp))}\t#${record.gestureId}\t" +
+            "${record.gestureType.label}\t${record.phase.label}\t" +
             "${record.masterX.toInt()},${record.masterY.toInt()}\t$targets\t" +
             "${record.latencyMs}ms\t$result"
     }

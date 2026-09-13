@@ -21,6 +21,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -42,6 +43,7 @@ import com.macromobile.inputmirror.diag.DiagStage
 import com.macromobile.inputmirror.diag.TestStep
 import com.macromobile.inputmirror.input.TestCase
 import com.macromobile.inputmirror.input.findActivity
+import com.macromobile.inputmirror.model.MirrorSettings
 import com.macromobile.inputmirror.ui.MirrorViewModel
 import com.macromobile.inputmirror.ui.test.MirrorTestView
 
@@ -96,6 +98,10 @@ fun MirrorTestScreen(
     val stats by viewModel.stats.collectAsStateWithLifecycle()
     val progress by viewModel.autoProgress.collectAsStateWithLifecycle()
     val diagRecords by DiagLog.records.collectAsStateWithLifecycle()
+    val live by viewModel.liveGesture.collectAsStateWithLifecycle()
+    val gestureLog by viewModel.gestureLog.collectAsStateWithLifecycle()
+    val sequenceResults by viewModel.sequenceResults.collectAsStateWithLifecycle()
+    val currentSettings by viewModel.settings.collectAsStateWithLifecycle()
     var testView by remember { mutableStateOf<MirrorTestView?>(null) }
     var showPanel by remember { mutableStateOf(true) }
 
@@ -151,6 +157,15 @@ fun MirrorTestScreen(
         )
     }
 
+    LaunchedEffect(live) {
+        testView?.showLiveGesture(
+            live?.let {
+                val type = it.finalType?.let { t -> "  →  $t" } ?: ""
+                "#${it.id}  ${it.state}  이동 ${"%.1f".format(it.distance)}px " +
+                    "/ 임계값 ${"%.1f".format(it.thresholdPx)}px$type"
+            },
+        )
+    }
     LaunchedEffect(planned) { testView?.showPlannedPoints(planned) }
     LaunchedEffect(results) { testView?.showResults(results) }
     LaunchedEffect(step, testView) {
@@ -183,9 +198,7 @@ fun MirrorTestScreen(
                                 }
                                 view.onMasterDown = { viewModel.onMasterDown(it) }
                                 view.onMasterMove = { viewModel.onMasterMove(it) }
-                                view.onMasterUp = { tail ->
-                                    viewModel.onMasterUp(tail, view.currentMasterPath())
-                                }
+                                view.onMasterUp = { viewModel.onMasterUp(it) }
                                 view.onMasterCancel = { viewModel.onMasterCancel() }
                                 testView = view
                             }
@@ -305,6 +318,70 @@ fun MirrorTestScreen(
                 Text("좌표계", style = MaterialTheme.typography.titleSmall)
                 Text(
                     environment?.report() ?: "화면 정보를 아직 읽지 않았습니다 (STEP 3 이상).",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+
+                Spacer(Modifier.height(12.dp))
+                Text("누르기 / 끌기 판정", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "DOWN 이후 손가락이 임계값 이상 움직이면 DRAG, 아니면 TAP 입니다. " +
+                        "몇 번째 터치인지는 보지 않습니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "임계값 ${"%.0f".format(currentSettings.dragThresholdDp)}dp" +
+                        (live?.let { "  (= ${"%.1f".format(it.thresholdPx)}px)" } ?: ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Slider(
+                    value = currentSettings.dragThresholdDp,
+                    onValueChange = { dp ->
+                        viewModel.updateSettings { it.copy(dragThresholdDp = dp) }
+                    },
+                    valueRange = MirrorSettings.MIN_DRAG_THRESHOLD_DP..
+                        MirrorSettings.MAX_DRAG_THRESHOLD_DP,
+                    steps = 13,
+                )
+
+                Spacer(Modifier.height(12.dp))
+                Text("순서 섞기 검사 (TEST A~E)", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "탭과 드래그를 여러 순서로 섞어 흘려보내고, 각 제스처가 순서와 무관하게 " +
+                        "제 움직임대로 판정되는지 기댓값과 대조합니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = { viewModel.runGestureSequences() },
+                    enabled = mirroring && progress == null,
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                ) {
+                    Text("TEST A~E 실행")
+                }
+                if (sequenceResults.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    sequenceResults.forEach { result ->
+                        Text(
+                            result.summary(),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = if (result.allOk) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+                Text("제스처 로그 (최근)", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    gestureLog.takeLast(18).joinToString("\n")
+                        .ifBlank { "아직 기록이 없습니다." },
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                 )

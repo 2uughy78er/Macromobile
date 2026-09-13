@@ -18,7 +18,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.macromobile.inputmirror.model.DispatchMode
@@ -30,6 +33,15 @@ import com.macromobile.inputmirror.ui.MirrorViewModel
 @Composable
 fun SettingsScreen(viewModel: MirrorViewModel, onBack: () -> Unit) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+
+    // dp → px 환산은 반드시 실제 화면 밀도를 거친다. 픽셀 상수를 직접 쓰지 않는다.
+    val density = LocalDensity.current.density
+    val context = LocalContext.current
+    // 안드로이드가 스스로 쓰는 터치 슬롭. 우리 임계값을 비교해 볼 기준으로만 보여준다.
+    val touchSlopDp = remember(density) {
+        val slopPx = android.view.ViewConfiguration.get(context).scaledTouchSlop
+        "%.1f".format(slopPx / density)
+    }
 
     Scaffold(
         modifier = Modifier.windowInsetsPadding(WindowInsets.systemBars),
@@ -86,6 +98,27 @@ fun SettingsScreen(viewModel: MirrorViewModel, onBack: () -> Unit) {
                         "MODE A 부터 확인하는 것이 순서입니다.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            SectionCard(
+                title = "누르기 / 끌기 판정",
+                subtitle = "DOWN 이후 움직인 거리로만 정합니다. 터치 순서는 보지 않습니다.",
+            ) {
+                LabeledSlider(
+                    label = "끌기로 보는 최소 이동거리",
+                    value = settings.dragThresholdDp,
+                    onValueChange = { dp ->
+                        viewModel.updateSettings { it.copy(dragThresholdDp = dp) }
+                    },
+                    valueRange = MirrorSettings.MIN_DRAG_THRESHOLD_DP..
+                        MirrorSettings.MAX_DRAG_THRESHOLD_DP,
+                    valueText = "${"%.0f".format(settings.dragThresholdDp)}dp" +
+                        " (= ${"%.0f".format(settings.dragThresholdDp * density)}px)",
+                    helper = "픽셀이 아니라 dp 입니다. 같은 픽셀 거리도 화면 밀도가 높으면 " +
+                        "훨씬 짧은 거리라서, 픽셀로 고정하면 기기마다 판정이 달라집니다. " +
+                        "이 기기의 밀도는 ${"%.2f".format(density)} 이고, 안드로이드 기본 " +
+                        "터치 슬롭은 ${touchSlopDp}dp 입니다.",
                 )
             }
 

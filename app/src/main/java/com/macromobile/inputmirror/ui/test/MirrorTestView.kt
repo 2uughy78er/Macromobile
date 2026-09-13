@@ -35,10 +35,16 @@ class MirrorTestView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
 ) : View(context, attrs) {
 
-    /** MASTER 영역의 터치를 바깥(전송기)으로 넘긴다. */
+    /**
+     * MASTER 영역의 터치를 바깥으로 넘긴다.
+     *
+     * 이 뷰는 **판정하지 않는다.** 원본 이벤트를 순서대로 넘길 뿐이고, TAP/DRAG 는
+     * 이동거리만 보는 판정기가 정한다. 뷰가 종류를 기억하기 시작하면 그 기억이
+     * 다음 제스처로 새어나가기 때문이다.
+     */
     var onMasterDown: ((TouchPoint) -> Unit)? = null
     var onMasterMove: ((List<TouchPoint>) -> Unit)? = null
-    var onMasterUp: ((List<TouchPoint>) -> Unit)? = null
+    var onMasterUp: ((TouchPoint) -> Unit)? = null
     var onMasterCancel: (() -> Unit)? = null
 
     /**
@@ -94,10 +100,14 @@ class MirrorTestView @JvmOverloads constructor(
     private val traces = HashMap<String, MutableList<MutableList<TouchPoint>>>()
     private val lastPoint = HashMap<String, TouchPoint>()
 
-    /** MASTER 에서 진행 중인 경로. 아직 보내지 않은 점을 모은다. */
-    private var masterPoints = ArrayList<TouchPoint>()
+    /** 지금 따라가는 손가락. 제스처가 끝나면 반드시 INVALID 로 돌아간다. */
     private var masterPointerId = MotionEvent.INVALID_POINTER_ID
-    private var pendingMoves = ArrayList<TouchPoint>()
+
+    /** 아직 바깥으로 넘기지 않은 이동 점. 한 번의 MotionEvent 안에서만 모은다. */
+    private val pendingMoves = ArrayList<TouchPoint>()
+
+    /** 진행 중인 제스처의 상태 표시. 판정기가 알려준 값을 그대로 그린다. */
+    private var liveGestureText: String? = null
 
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -173,6 +183,13 @@ class MirrorTestView @JvmOverloads constructor(
         invalidate()
     }
 
+    /** 진행 중인 제스처의 상태를 받아 MASTER 영역에 표시한다. */
+    fun showLiveGesture(text: String?) {
+        if (liveGestureText == text) return
+        liveGestureText = text
+        invalidate()
+    }
+
     /** 대상별 마지막 결과를 받아 표시한다. */
     fun showResults(results: Map<String, String>) {
         lastResults.clear()
@@ -221,7 +238,6 @@ class MirrorTestView @JvmOverloads constructor(
             MotionEvent.ACTION_CANCEL -> {
                 if (masterPointerId != MotionEvent.INVALID_POINTER_ID) {
                     masterPointerId = MotionEvent.INVALID_POINTER_ID
-                    masterPoints = ArrayList()
                     pendingMoves.clear()
                     onMasterCancel?.invoke()
                 }
@@ -239,20 +255,18 @@ class MirrorTestView @JvmOverloads constructor(
         if (area.isMaster && masterPointerId == MotionEvent.INVALID_POINTER_ID) {
             // 미러링은 손가락 하나만 따라간다. 여러 손가락은 기록만 하고 보내지 않는다.
             masterPointerId = pointerId
-            masterPoints = arrayListOf(point)
             pendingMoves.clear()
             onMasterDown?.invoke(point)
         }
     }
 
     private fun handleMove(pointerId: Int, x: Float, y: Float, now: Long) {
-        val area = areaAt(x, y) ?: return
         val point = TouchPoint(x, y, now)
-        appendTrace(area.name, point)
-        if (pointerId == masterPointerId) {
-            masterPoints.add(point)
-            pendingMoves.add(point)
-        }
+        // 그리기는 영역 안일 때만. 하지만 **판정에 넘기는 일은 영역과 무관하게** 한다.
+        // 영역 밖으로 나간 이동을 버리면 손가락이 실제로 움직인 거리를 잃어버리고,
+        // 그러면 끌기를 누르기로 잘못 읽게 된다.
+        areaAt(x, y)?.let { appendTrace(it.name, point) }
+        if (pointerId == masterPointerId) pendingMoves.add(point)
     }
 
     private fun flushMasterMoves() {
@@ -268,16 +282,13 @@ class MirrorTestView @JvmOverloads constructor(
         if (area != null) appendTrace(area.name, point)
 
         if (pointerId == masterPointerId) {
-            masterPoints.add(point)
-            val tail = ArrayList(pendingMoves).apply { add(point) }
-            pendingMoves.clear()
-            onMasterUp?.invoke(tail)
+            // 아직 넘기지 않은 이동을 먼저 흘려보내고 나서 UP 을 알린다. 순서가 뒤집히면
+            // 판정기가 마지막 이동을 UP 뒤에 받게 되어 거리 계산이 틀어진다.
+            flushMasterMoves()
+            onMasterUp?.invoke(point)
             masterPointerId = MotionEvent.INVALID_POINTER_ID
         }
     }
-
-    /** MASTER 경로 전체. 일괄 전송 방식에서 쓴다. */
-    fun currentMasterPath(): List<TouchPoint> = ArrayList(masterPoints)
 
     private fun areaAt(x: Float, y: Float): TestArea? =
         areas.firstOrNull { it.region.isValid && it.region.contains(x, y) }
@@ -327,6 +338,14 @@ class MirrorTestView @JvmOverloads constructor(
 
         canvas.drawText(area.name, r.left + 22f, r.top + 48f, labelPaint)
         canvas.drawText("${r.width} × ${r.height}", r.left + 22f, r.top + 82f, infoPaint)
+
+        if (area.isMaster) {
+            liveGestureText?.let { text ->
+                infoPaint.color = LIVE_COLOR
+                canvas.drawText(text, r.left + 22f, r.top + 116f, infoPaint)
+                infoPaint.color = INFO_COLOR
+            }
+        }
 
         lastPoint[area.name]?.let { p ->
             val localX = (p.x - r.left).roundToInt()
@@ -387,6 +406,9 @@ class MirrorTestView @JvmOverloads constructor(
 
         /** 주입하려는 위치. 실제 전달된 터치(초록)와 겹치는지 눈으로 비교한다. */
         val PLANNED_COLOR = Color.rgb(255, 190, 70)
+
+        /** 진행 중인 제스처 상태(PENDING / DRAG)를 적는 색. */
+        val LIVE_COLOR = Color.rgb(255, 235, 150)
         val OK_COLOR = Color.rgb(120, 230, 150)
         val FAIL_COLOR = Color.rgb(255, 120, 120)
         val INFO_COLOR = Color.argb(220, 210, 220, 235)
