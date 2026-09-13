@@ -1,0 +1,21 @@
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+local.properties
+.idea/
+*.iml
+captures/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# 서명 키는 저장소에 올리지 않는다.
+*.jks
+*.keystore
+# 예외: debug 전용 고정 키. 없으면 빌드마다 서명이 달라져 덮어쓰기 설치가 막힌다.
+!keystore/debug.keystore
+
+.DS_Store
+Thumbs.db

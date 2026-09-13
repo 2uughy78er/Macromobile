@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Input Mirror</string>
+    <string name="accessibility_service_label">Input Mirror 입력 전달</string>
+    <string name="accessibility_service_description">화면에 보이는 대상 영역에 터치와 스와이프를 전달합니다. 사용자가 미러링을 켠 동안에만 동작하며, 화면 내용을 읽거나 저장하지 않습니다.</string>
+</resources>
