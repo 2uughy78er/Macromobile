@@ -59,6 +59,9 @@ class MirrorViewModel(app: Application) : AndroidViewModel(app) {
     private var masterRegion = Region.EMPTY
     private var targetRegions: List<Region> = emptyList()
 
+    /** 단계별로 켤 TARGET 개수. 기본은 제한 없음(전체). */
+    private var targetLimit: Int = Int.MAX_VALUE
+
     val tracer = GestureTracer()
 
     /** 각 대상에 주입하려는 화면 좌표. 테스트 화면이 마커로 표시한다. */
@@ -133,9 +136,28 @@ class MirrorViewModel(app: Application) : AndroidViewModel(app) {
         applySettings(settings.value)
     }
 
-    /** 좌표계 진단용 환경 정보를 지금 값으로 새로 읽는다. */
-    fun captureEnvironment(view: View?) {
-        _environment.value = EnvironmentInfo.collect(getApplication(), view)
+    /**
+     * 좌표계 진단용 환경 정보를 지금 값으로 새로 읽는다.
+     *
+     * 컨텍스트를 넘기지 않고 View 만 넘긴다. 예전에는 여기서 Application 컨텍스트를
+     * 넘겼고, 그 컨텍스트로 `Context.getDisplay()` 를 부르는 순간
+     * `UnsupportedOperationException` 이 터져 테스트 화면이 열리자마자 죽었다.
+     * View 의 컨텍스트는 언제나 Activity 라 그런 일이 없다.
+     */
+    fun captureEnvironment(view: View, readWindowMetrics: Boolean = true) {
+        _environment.value = EnvironmentInfo.collect(view, readWindowMetrics)
+    }
+
+    /**
+     * 이번 단계에서 쓸 TARGET 개수 상한.
+     *
+     * STEP 9 는 TARGET 1개만, STEP 10 은 3개 모두 쓴다. 한 번에 하나씩 늘려야
+     * 무엇이 문제를 일으키는지 가려낼 수 있다.
+     */
+    fun setTargetLimit(limit: Int) {
+        if (targetLimit == limit) return
+        targetLimit = limit
+        applySettings(settings.value)
     }
 
     /** 마스터 영역(View 공간). 자동 테스트가 쓴다. */
@@ -150,8 +172,8 @@ class MirrorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun buildTargets(current: MirrorSettings): List<MirrorTarget> {
-        if (!masterRegion.isValid) return emptyList()
-        return targetRegions.mapIndexedNotNull { index, region ->
+        if (!masterRegion.isValid || targetLimit <= 0) return emptyList()
+        return targetRegions.take(targetLimit).mapIndexedNotNull { index, region ->
             val enabled = current.enabledTargets.getOrElse(index) { true }
             if (!enabled || !region.isValid) return@mapIndexedNotNull null
             MirrorTarget(

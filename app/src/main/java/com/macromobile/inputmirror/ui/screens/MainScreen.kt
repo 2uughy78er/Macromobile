@@ -32,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.macromobile.inputmirror.diag.CrashRecorder
 import com.macromobile.inputmirror.ui.MirrorViewModel
 
 /**
@@ -47,11 +48,15 @@ fun MainScreen(
     onOpenLog: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenPermission: () -> Unit,
+    onOpenDiag: () -> Unit = {},
 ) {
     val capability by viewModel.capability.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    // 앱이 죽은 적이 있으면 다음 실행 때 맨 위에 알린다. 사용자가 로그를 찾아다니지
+    // 않아도 되도록, 원인을 볼 수 있는 곳으로 바로 보낸다.
+    val crashReports = remember { CrashRecorder.reports() }
 
     LaunchedEffect(Unit) { viewModel.refreshCapability() }
     LaunchedEffect(message) {
@@ -84,6 +89,22 @@ fun MainScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            if (crashReports.isNotEmpty()) {
+                SectionCard(
+                    title = "지난 실행에서 앱이 죽었습니다 (${crashReports.size}건)",
+                    subtitle = "원인이 기록되어 있습니다.",
+                    trailing = { TextButton(onClick = onOpenDiag) { Text("보기") } },
+                ) {
+                    val latest = crashReports.first()
+                    Text(latest.headline, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "마지막 단계: ${latest.event} · ${latest.component} · 스레드 ${latest.threadName}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
             SectionCard(
                 title = "이 앱은 검증용 MVP 입니다",
                 subtitle = "본 프로젝트로 넘어가기 전에 '되는지'부터 확인합니다.",
@@ -179,6 +200,9 @@ fun MainScreen(
             }
             OutlinedButton(onClick = onOpenLog, modifier = Modifier.fillMaxWidth()) {
                 Text("기록 보기")
+            }
+            OutlinedButton(onClick = onOpenDiag, modifier = Modifier.fillMaxWidth()) {
+                Text("진단 · 크래시 기록")
             }
         }
     }

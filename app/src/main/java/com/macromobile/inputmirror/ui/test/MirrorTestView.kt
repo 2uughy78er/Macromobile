@@ -58,6 +58,31 @@ class MirrorTestView @JvmOverloads constructor(
     /** 화면상 원점. 그릴 때 화면 좌표를 View 좌표로 되돌리는 데 쓴다. */
     private var geometry: ScreenGeometry = ScreenGeometry.IDENTITY
 
+    // ------------------------------------------------------------------
+    // 단계 스위치 (STEP 1~10)
+    //
+    // 예전에는 영역 계산·좌표 변환·터치 수집·주입을 뷰가 붙는 순간 한꺼번에 했다.
+    // 그래서 어느 하나가 죽으면 화면 전체가 죽었고 범인을 가릴 수 없었다.
+    // 이제 바깥에서 단계별로 하나씩 켠다.
+    // ------------------------------------------------------------------
+
+    /** STEP 6 이상: 4분할 영역을 그린다. */
+    var drawAreas: Boolean = true
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    /** STEP 7 이상: 화면상 원점을 읽어 바깥에 알린다. */
+    var reportGeometry: Boolean = true
+        set(value) {
+            field = value
+            if (value) post { publishAreas() }
+        }
+
+    /** STEP 8 이상: 터치를 받아 기록하고 바깥에 넘긴다. */
+    var collectTouch: Boolean = true
+
     val areas = listOf(
         TestArea("MASTER", isMaster = true),
         TestArea("TARGET 1", isMaster = false),
@@ -124,6 +149,7 @@ class MirrorTestView @JvmOverloads constructor(
      * 다시 알린다. 여기서 한 번 틀리면 주입 좌표가 통째로 어긋난다.
      */
     private fun publishAreas() {
+        if (!reportGeometry) return
         if (width <= 0 || height <= 0) return
         geometry = ScreenGeometry.of(this)
         onAreasChanged?.invoke(areas[0].region, areas.drop(1).map { it.region }, geometry)
@@ -171,6 +197,7 @@ class MirrorTestView @JvmOverloads constructor(
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!collectTouch) return super.onTouchEvent(event)
         val now = System.currentTimeMillis()
 
         when (event.actionMasked) {
@@ -274,6 +301,7 @@ class MirrorTestView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (!drawAreas) return
         areas.forEach { area ->
             if (!area.region.isValid) return@forEach
             drawArea(canvas, area)
