@@ -67,6 +67,8 @@ fun HomeScreen(
     val blocked by viewModel.blockedReason.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val windowDump by viewModel.windowDump.collectAsStateWithLifecycle()
+    val probeResults by viewModel.probeResults.collectAsStateWithLifecycle()
+    val probeProgress by viewModel.probeProgress.collectAsStateWithLifecycle()
 
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
@@ -180,6 +182,57 @@ fun HomeScreen(
             }
 
             ControlCard(state, viewModel)
+
+            SectionCard(
+                title = "동시 주입 측정",
+                subtitle = "대상 여럿에 한꺼번에 주입이 실제로 되는지 숫자로 확인합니다.",
+            ) {
+                Text(
+                    "한 제스처에 손가락을 여러 개 담았을 때 그것들이 서로 다른 창에 각각 " +
+                        "전달되는지는 안드로이드 문서가 보장하지 않습니다. 그래서 재봅니다. " +
+                        "MASTER 한가운데를 누르는 동작을 방식별로 흘려보내고 대상마다 결과를 셉니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { viewModel.runInjectionProbe() },
+                    enabled = state == MirrorState.RUNNING && probeProgress == null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(probeProgress ?: "측정 시작 (방식 3종 × 10회)")
+                }
+                if (state != MirrorState.RUNNING) {
+                    Text(
+                        "START 를 누른 뒤에 잴 수 있습니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (probeResults.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    probeResults.forEach { result ->
+                        Text(
+                            result.summary(),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = if (result.allCompleted) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    val best = probeResults.firstOrNull { it.allCompleted }
+                    Text(
+                        best?.let { "→ ${it.mode.koreanLabel} 이 모든 대상에서 통했습니다." }
+                            ?: "→ 모든 대상에 매번 통한 방식이 없습니다. " +
+                            "위 숫자가 이 기기의 실제 한계입니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
 
             if (failures.isNotEmpty()) {
                 SectionCard(

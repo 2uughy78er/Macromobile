@@ -10,6 +10,7 @@ import com.macromobile.inputmirror.mirror.MirrorError
 import com.macromobile.inputmirror.mirror.MirrorFailure
 import com.macromobile.inputmirror.mirror.MirrorRuntime
 import com.macromobile.inputmirror.mirror.MirrorState
+import com.macromobile.inputmirror.mirror.ProbeResult
 import com.macromobile.inputmirror.model.MirrorLayout
 import com.macromobile.inputmirror.model.MirrorRegion
 import com.macromobile.inputmirror.model.MirrorSettings
@@ -48,6 +49,13 @@ class SetupViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
+
+    /** 주입 가능성 측정 결과. 비어 있으면 아직 재보지 않은 것이다. */
+    private val _probeResults = MutableStateFlow<List<ProbeResult>>(emptyList())
+    val probeResults: StateFlow<List<ProbeResult>> = _probeResults.asStateFlow()
+
+    private val _probeProgress = MutableStateFlow<String?>(null)
+    val probeProgress: StateFlow<String?> = _probeProgress.asStateFlow()
 
     /** 창 목록 덤프. 영역을 지정할 때 참고한다. */
     private val _windowDump = MutableStateFlow<String?>(null)
@@ -215,6 +223,25 @@ class SetupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stop() {
         MirrorAccessibilityService.instance?.engine?.stop()
+    }
+
+    /**
+     * 대상 여럿에 동시에 주입이 되는지 실제로 재본다.
+     *
+     * 이 숫자가 나오기 전에는 "3개 동시 미러링이 된다"고 말할 수 없다.
+     */
+    fun runInjectionProbe(repeatEach: Int = 10) {
+        val engine = MirrorAccessibilityService.instance?.engine ?: run {
+            reportNotConnected()
+            return
+        }
+        viewModelScope.launch {
+            _probeResults.value = emptyList()
+            _probeResults.value = engine.probeInjection(repeatEach) { progress ->
+                _probeProgress.value = progress
+            }
+            _probeProgress.value = null
+        }
     }
 
     fun clearRecords() {

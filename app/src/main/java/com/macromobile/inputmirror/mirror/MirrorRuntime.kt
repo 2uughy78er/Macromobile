@@ -105,3 +105,34 @@ object MirrorRuntime {
 
     fun dumpGestures(): String = _gestures.value.joinToString("\n\n") { it.describe() }
 }
+
+/**
+ * 주입 가능성 측정 결과 한 묶음.
+ *
+ * "3개 동시에 되나요?" 에 대한 답을 짐작이 아니라 숫자로 남긴다.
+ */
+data class ProbeResult(
+    val mode: com.macromobile.inputmirror.model.DispatchMode,
+    val attempts: Int,
+    /** 대상 이름 → (결과 이름 → 횟수). 대상마다 **따로** 센다. */
+    val perTarget: Map<String, Map<String, Int>>,
+) {
+    /** 모든 대상이 매번 성공했는가. 이것이 참일 때만 "동시 주입이 된다"고 말할 수 있다. */
+    val allCompleted: Boolean
+        get() = perTarget.isNotEmpty() && perTarget.values.all { counts ->
+            counts["COMPLETED"] == attempts
+        }
+
+    fun summary(): String = buildString {
+        append(if (allCompleted) "✔ " else "✘ ")
+        append(mode.name).append(" ×").append(attempts)
+        if (perTarget.isEmpty()) {
+            append("  — 결과 없음 (대상에 도달하지 못했습니다)")
+            return@buildString
+        }
+        perTarget.forEach { (name, counts) ->
+            append("\n    ").append(name).append(": ")
+            append(counts.entries.joinToString(" ") { "${it.key}=${it.value}" })
+        }
+    }
+}

@@ -12,6 +12,7 @@ import com.macromobile.inputmirror.input.ScreenGeometry
 import com.macromobile.inputmirror.input.TouchPoint
 import com.macromobile.inputmirror.input.TraceResult
 import com.macromobile.inputmirror.input.TraceStage
+import com.macromobile.inputmirror.model.DispatchMode
 import com.macromobile.inputmirror.model.LayoutStatus
 import com.macromobile.inputmirror.model.MirrorLayout
 import com.macromobile.inputmirror.model.MirrorSettings
@@ -20,6 +21,7 @@ import com.macromobile.inputmirror.overlay.MasterInputView
 import com.macromobile.inputmirror.service.MirrorAccessibilityService
 import com.macromobile.inputmirror.storage.MirrorLogStore
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -415,10 +417,85 @@ class MirrorEngine(
         }
     }
 
+    // ------------------------------------------------------------------
+    // 주입 가능성 측정
+    // ------------------------------------------------------------------
+
+    /**
+     * 대상 여럿에 동시에 주입이 되는지 **실제로 재본다.**
+     *
+     * 한 제스처에 스트로크를 여러 개 담았을 때 그것들이 서로 다른 창에 각각 전달되는지는
+     * 안드로이드 문서가 보장하지 않는다. 되는 것처럼 만들어 놓고 넘어갈 수 없으므로,
+     * MASTER 한가운데를 누르는 동작을 방식별로 여러 번 흘려보내고 **대상마다 결과를 세서**
+     * 숫자로 남긴다.
+     *
+     * 방식 세 가지를 모두 돌려 비교한다.
+     * - SINGLE     : 대상 하나에만. 이것도 안 되면 좌표나 권한 문제다.
+     * - SEQUENTIAL : 대상마다 따로 차례로. 뒤의 것이 앞의 것을 취소하는지 본다.
+     * - COMBINED   : 한 제스처에 손가락 여러 개. 진짜 동시 입력에 가장 가깝다.
+     */
+    suspend fun probeInjection(
+        repeatEach: Int = 10,
+        onProgress: (String) -> Unit = {},
+    ): List<ProbeResult> {
+        val master = layout.master ?: return emptyList()
+        if (state != MirrorState.RUNNING) {
+            MirrorRuntime.addFailure(
+                MirrorFailure(MirrorError.SERVICE_ERROR, "먼저 START 를 눌러주세요."),
+            )
+            return emptyList()
+        }
+
+        val originalMode = dispatcher.dispatchMode
+        val results = ArrayList<ProbeResult>()
+        val centerX = master.bounds.centerX.toFloat()
+        val centerY = master.bounds.centerY.toFloat()
+
+        try {
+            for (mode in listOf(
+                DispatchMode.SINGLE, DispatchMode.SEQUENTIAL, DispatchMode.COMBINED,
+            )) {
+                dispatcher.dispatchMode = mode
+                val counts = LinkedHashMap<String, LinkedHashMap<String, Int>>()
+
+                repeat(repeatEach) { index ->
+                    onProgress("${mode.name} ${index + 1}/$repeatEach")
+                    val now = System.currentTimeMillis()
+                    recognizer.onDown(TouchPoint(centerX, centerY, now))
+                    val outcome = recognizer.onUp(TouchPoint(centerX, centerY, now + TAP_HOLD_MS))
+                    if (outcome != null) {
+                        dispatcher.submitWholeGesture(outcome)
+                        delay(PROBE_GAP_MS)
+                        tracer.snapshot()
+                            .filter {
+                                it.stage == TraceStage.CALLBACK && it.gestureId == outcome.session.id
+                            }
+                            .forEach { entry ->
+                                entry.targetNames.forEach { name ->
+                                    val perTarget = counts.getOrPut(name) { LinkedHashMap() }
+                                    val key = entry.result.name
+                                    perTarget[key] = (perTarget[key] ?: 0) + 1
+                                }
+                            }
+                    }
+                }
+                results += ProbeResult(mode, repeatEach, counts)
+                MirrorRuntime.addLog(results.last().summary())
+            }
+        } finally {
+            dispatcher.dispatchMode = originalMode
+        }
+        return results
+    }
+
     fun traceDump(): String = tracer.dump()
 
     companion object {
         private const val TAG = "MirrorEngine"
+        private const val TAP_HOLD_MS = 60L
+
+        /** 한 번 보내고 결과를 기다리는 시간. 콜백이 오기 전에 다음을 보내면 뒤엉킨다. */
+        private const val PROBE_GAP_MS = 350L
         const val KEY_MASTER_INPUT = "master_input"
         const val KEY_FLOATING_CONTROL = "floating_control"
     }
