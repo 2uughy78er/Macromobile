@@ -14,10 +14,30 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
-/** 제스처 전송 결과. 실패 사유는 사용자에게 그대로 보여준다. */
+/**
+ * 제스처 전송 결과.
+ *
+ * "실패"를 한 덩어리로 뭉뚱그리지 않는다. 원인이 다르면 고치는 방법도 다르기 때문이다.
+ * - [Rejected]: `dispatchGesture` 가 false 를 돌려줬다. 아예 접수되지 않았다.
+ * - [Cancelled]: 접수는 됐는데 시스템이 도중에 취소했다.
+ * - [Threw]: 제스처를 만드는 중 예외가 났다. 메시지를 그대로 보존한다.
+ */
 sealed interface DispatchResult {
     data object Success : DispatchResult
-    data class Failed(val reason: String) : DispatchResult
+    data class Rejected(val reason: String) : DispatchResult
+    data class Cancelled(val reason: String) : DispatchResult
+    data class Threw(val reason: String) : DispatchResult
+
+    /** 사용자에게 보여줄 사유. 성공이면 빈 문자열. */
+    val message: String
+        get() = when (this) {
+            Success -> ""
+            is Rejected -> reason
+            is Cancelled -> reason
+            is Threw -> reason
+        }
+
+    val isSuccess: Boolean get() = this is Success
 }
 
 /**
@@ -66,38 +86,46 @@ class MirrorAccessibilityService : AccessibilityService() {
      * 이어붙이는 스트로크(`continueStroke`)는 앞 제스처가 끝난 뒤에만 보낼 수 있으므로
      * 호출한 쪽이 순서를 지킬 수 있도록 완료를 기다리는 형태로 둔다.
      */
-    suspend fun dispatch(gesture: GestureDescription): DispatchResult =
-        suspendCancellableCoroutine { cont ->
-            val callback = object : GestureResultCallback() {
-                override fun onCompleted(gestureDescription: GestureDescription?) {
-                    if (cont.isActive) cont.resume(DispatchResult.Success)
-                }
+    suspend fun dispatch(
+        gesture: GestureDescription,
+        /** `dispatchGesture` 의 반환값을 그대로 알려준다. 접수 여부와 취소를 구분하기 위함이다. */
+        onAccepted: (Boolean) -> Unit = {},
+    ): DispatchResult = suspendCancellableCoroutine { cont ->
+        val callback = object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                if (cont.isActive) cont.resume(DispatchResult.Success)
+            }
 
-                override fun onCancelled(gestureDescription: GestureDescription?) {
-                    if (cont.isActive) {
-                        cont.resume(
-                            DispatchResult.Failed(
-                                "제스처가 취소되었습니다. 대상 창이 화면에서 사라졌거나 " +
-                                    "다른 앱이 입력을 막고 있을 수 있습니다.",
-                            ),
-                        )
-                    }
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                if (cont.isActive) {
+                    cont.resume(
+                        DispatchResult.Cancelled(
+                            "시스템이 제스처를 취소했습니다. 주입 좌표가 이 창 밖이거나, " +
+                                "다른 제스처가 끼어들었거나, 대상 창이 입력을 막고 있을 수 있습니다.",
+                        ),
+                    )
                 }
-            }
-            val accepted = try {
-                dispatchGesture(gesture, callback, null)
-            } catch (e: Exception) {
-                Log.e(TAG, "제스처 전송 실패", e)
-                false
-            }
-            if (!accepted && cont.isActive) {
-                cont.resume(
-                    DispatchResult.Failed(
-                        "제스처를 전달하지 못했습니다. 이미 다른 제스처가 진행 중일 수 있습니다.",
-                    ),
-                )
             }
         }
+        val accepted = try {
+            dispatchGesture(gesture, callback, null)
+        } catch (e: Exception) {
+            Log.e(TAG, "제스처 전송 중 예외", e)
+            onAccepted(false)
+            if (cont.isActive) {
+                cont.resume(DispatchResult.Threw(e.message ?: e::class.java.simpleName))
+            }
+            return@suspendCancellableCoroutine
+        }
+        onAccepted(accepted)
+        if (!accepted && cont.isActive) {
+            cont.resume(
+                DispatchResult.Rejected(
+                    "dispatchGesture 가 false 를 돌려줬습니다. 접수 자체가 되지 않았습니다.",
+                ),
+            )
+        }
+    }
 
     companion object {
         private const val TAG = "MirrorA11yService"

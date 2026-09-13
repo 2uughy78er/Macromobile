@@ -6,10 +6,20 @@ import android.provider.Settings
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.macromobile.inputmirror.MirrorApp
+import android.view.View
+import com.macromobile.inputmirror.input.AutoTestRunner
 import com.macromobile.inputmirror.input.CoordinateTransformer
+import com.macromobile.inputmirror.input.EnvironmentInfo
 import com.macromobile.inputmirror.input.GestureDispatcher
+import com.macromobile.inputmirror.input.GestureTracer
+import com.macromobile.inputmirror.input.MappedPoint
 import com.macromobile.inputmirror.input.MirrorTarget
+import com.macromobile.inputmirror.input.ScreenGeometry
+import com.macromobile.inputmirror.input.TestCase
+import com.macromobile.inputmirror.input.TestStats
 import com.macromobile.inputmirror.input.TouchPoint
+import com.macromobile.inputmirror.input.TraceResult
+import com.macromobile.inputmirror.input.TraceStage
 import com.macromobile.inputmirror.model.MirrorMode
 import com.macromobile.inputmirror.model.MirrorSettings
 import com.macromobile.inputmirror.model.Region
@@ -49,9 +59,35 @@ class MirrorViewModel(app: Application) : AndroidViewModel(app) {
     private var masterRegion = Region.EMPTY
     private var targetRegions: List<Region> = emptyList()
 
-    private val dispatcher = GestureDispatcher(viewModelScope) { record ->
+    val tracer = GestureTracer()
+
+    /** 각 대상에 주입하려는 화면 좌표. 테스트 화면이 마커로 표시한다. */
+    private val _plannedPoints = MutableStateFlow<Map<String, MappedPoint>>(emptyMap())
+    val plannedPoints: StateFlow<Map<String, MappedPoint>> = _plannedPoints.asStateFlow()
+
+    /** 대상별 마지막 결과. COMPLETED / CANCELLED / REJECTED / EXCEPTION. */
+    private val _targetResults = MutableStateFlow<Map<String, String>>(emptyMap())
+    val targetResults: StateFlow<Map<String, String>> = _targetResults.asStateFlow()
+
+    private val _environment = MutableStateFlow<EnvironmentInfo?>(null)
+    val environment: StateFlow<EnvironmentInfo?> = _environment.asStateFlow()
+
+    private val _stats = MutableStateFlow<List<TestStats>>(emptyList())
+    val stats: StateFlow<List<TestStats>> = _stats.asStateFlow()
+
+    private val _autoProgress = MutableStateFlow<String?>(null)
+    val autoProgress: StateFlow<String?> = _autoProgress.asStateFlow()
+
+    private val dispatcher = GestureDispatcher(viewModelScope, tracer) { record ->
         container.logStore.add(record)
+        _plannedPoints.value = record.targets
+        collectStats(record)
     }
+
+    private val autoRunner = AutoTestRunner(dispatcher)
+
+    /** 이번 통계 수집 구간의 이름. 자동 테스트가 돌 때만 채워진다. */
+    private var statsBucket: String? = null
 
     init {
         viewModelScope.launch {
@@ -84,15 +120,30 @@ class MirrorViewModel(app: Application) : AndroidViewModel(app) {
     // 테스트 영역
     // ------------------------------------------------------------------
 
-    /** 테스트 뷰가 영역을 정하면 알려준다. 화면이 회전해도 다시 불린다. */
-    fun onAreasChanged(master: Region, targets: List<Region>) {
+    /**
+     * 테스트 뷰가 영역과 화면상 위치를 알려준다.
+     *
+     * 영역은 View 공간이고 [geometry] 가 그것을 화면 공간으로 옮긴다. 회전하거나 인셋이
+     * 바뀌면 다시 불리므로, 그때마다 변환기를 새로 만든다.
+     */
+    fun onAreasChanged(master: Region, targets: List<Region>, geometry: ScreenGeometry) {
         masterRegion = master
         targetRegions = targets
+        dispatcher.geometry = geometry
         applySettings(settings.value)
     }
 
+    /** 좌표계 진단용 환경 정보를 지금 값으로 새로 읽는다. */
+    fun captureEnvironment(view: View?) {
+        _environment.value = EnvironmentInfo.collect(getApplication(), view)
+    }
+
+    /** 마스터 영역(View 공간). 자동 테스트가 쓴다. */
+    fun masterRegion(): Region = masterRegion
+
     private fun applySettings(current: MirrorSettings) {
         dispatcher.mode = current.mode
+        dispatcher.dispatchMode = current.dispatchMode
         dispatcher.inputDelayMs = current.inputDelayMs
         container.logStore.writeToFile = current.saveLogToFile
         dispatcher.targets = buildTargets(current)
@@ -134,6 +185,9 @@ class MirrorViewModel(app: Application) : AndroidViewModel(app) {
             return false
         }
         container.logStore.startSession()
+        tracer.reset()
+        _targetResults.value = emptyMap()
+        _plannedPoints.value = emptyMap()
         dispatcher.start()
         _mirroring.value = true
         return true
@@ -159,6 +213,7 @@ class MirrorViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onMasterUp(points: List<TouchPoint>, wholePath: List<TouchPoint>) {
         if (!_mirroring.value) return
+        updateTargetResults()
         if (settings.value.mode == MirrorMode.BATCH) {
             dispatcher.onWholeStroke(wholePath)
         } else {
@@ -173,6 +228,85 @@ class MirrorViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------------
     // 설정 / 로그
     // ------------------------------------------------------------------
+
+    // ------------------------------------------------------------------
+    // 자동 반복 테스트
+    // ------------------------------------------------------------------
+
+    /** 같은 동작을 정해진 횟수만큼 자동으로 흘려보내 성공률을 잰다. */
+    fun runAutoTest(case: TestCase, repeatCount: Int) {
+        if (!_mirroring.value) {
+            showMessage("먼저 미러링을 시작해주세요.")
+            return
+        }
+        if (!masterRegion.isValid) {
+            showMessage("테스트 영역이 아직 준비되지 않았습니다.")
+            return
+        }
+        viewModelScope.launch {
+            statsBucket = case.name
+            _stats.value = _stats.value.filterNot { it.name == case.name } + TestStats(case.name)
+            autoRunner.run(case, masterRegion, repeatCount) { done, total ->
+                _autoProgress.value = "${case.name} $done/$total"
+            }
+            _autoProgress.value = null
+            statsBucket = null
+        }
+    }
+
+    /** 표준 테스트 9종을 차례로 돌린다(요구사항 10단계). */
+    fun runStandardSuite(repeatEach: Int) {
+        if (!_mirroring.value) {
+            showMessage("먼저 미러링을 시작해주세요.")
+            return
+        }
+        viewModelScope.launch {
+            TestCase.STANDARD.forEach { case ->
+                statsBucket = case.name
+                _stats.value = _stats.value.filterNot { it.name == case.name } + TestStats(case.name)
+                autoRunner.run(case, masterRegion, repeatEach) { done, total ->
+                    _autoProgress.value = "${case.name} $done/$total"
+                }
+            }
+            _autoProgress.value = null
+            statsBucket = null
+        }
+    }
+
+    fun clearStats() {
+        _stats.value = emptyList()
+    }
+
+    /** UP 단계만 한 번의 동작으로 세어 성공률을 계산한다. */
+    private fun collectStats(record: com.macromobile.inputmirror.input.MirrorRecord) {
+        val bucket = statsBucket ?: return
+        if (record.phase != com.macromobile.inputmirror.input.TouchPhase.UP) return
+        _stats.value = _stats.value.map { stat ->
+            if (stat.name != bucket) return@map stat
+            val lastResult = tracer.snapshot().lastOrNull { it.stage == TraceStage.CALLBACK }?.result
+            stat.copy(
+                attempts = stat.attempts + 1,
+                success = stat.success + if (record.success) 1 else 0,
+                cancelled = stat.cancelled + if (lastResult == TraceResult.CANCELLED) 1 else 0,
+                rejected = stat.rejected + if (lastResult == TraceResult.REJECTED) 1 else 0,
+                exception = stat.exception + if (lastResult == TraceResult.EXCEPTION) 1 else 0,
+                latenciesMs = stat.latenciesMs + record.latencyMs,
+            )
+        }
+        updateTargetResults()
+    }
+
+    /** 추적 기록에서 대상별 마지막 결과를 뽑아 화면에 표시한다. */
+    private fun updateTargetResults() {
+        val results = LinkedHashMap<String, String>()
+        tracer.snapshot().filter { it.stage == TraceStage.CALLBACK }.forEach { entry ->
+            entry.targetNames.forEach { name -> results[name] = entry.result.name }
+        }
+        _targetResults.value = results
+    }
+
+    /** 추적 기록 전체. 문제 원인을 눈으로 확인하는 데 쓴다. */
+    fun traceDump(): String = tracer.dump()
 
     fun updateSettings(transform: (MirrorSettings) -> MirrorSettings) {
         viewModelScope.launch { container.settingsRepository.update(transform) }

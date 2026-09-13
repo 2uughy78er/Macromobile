@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.macromobile.inputmirror.model.DispatchMode
 import com.macromobile.inputmirror.model.FitMode
 import com.macromobile.inputmirror.model.MirrorMode
 import com.macromobile.inputmirror.model.MirrorSettings
@@ -25,6 +26,7 @@ class SettingsRepository(private val context: Context) {
         context.mirrorDataStore.edit { prefs ->
             val next = transform(prefs.toSettings())
             prefs[KEY_MODE] = next.mode.name
+            prefs[KEY_DISPATCH_MODE] = next.dispatchMode.name
             prefs[KEY_DELAY] = next.inputDelayMs.coerceIn(0L, 1_000L)
             prefs[KEY_FIT] = next.fitMode.name
             prefs[KEY_TARGETS] = next.enabledTargets.joinToString(",") { it.toString() }
@@ -39,6 +41,8 @@ class SettingsRepository(private val context: Context) {
     private fun Preferences.toSettings() = MirrorSettings(
         mode = runCatching { MirrorMode.valueOf(this[KEY_MODE] ?: "") }
             .getOrDefault(MirrorMode.STREAMING),
+        dispatchMode = runCatching { DispatchMode.valueOf(this[KEY_DISPATCH_MODE] ?: "") }
+            .getOrDefault(DispatchMode.COMBINED),
         inputDelayMs = this[KEY_DELAY] ?: 0L,
         fitMode = runCatching { FitMode.valueOf(this[KEY_FIT] ?: "") }.getOrDefault(FitMode.FIT),
         enabledTargets = (this[KEY_TARGETS] ?: "true,true,true")
@@ -53,6 +57,7 @@ class SettingsRepository(private val context: Context) {
 
     private companion object {
         val KEY_MODE = stringPreferencesKey("mode")
+        val KEY_DISPATCH_MODE = stringPreferencesKey("dispatch_mode")
         val KEY_DELAY = longPreferencesKey("input_delay_ms")
         val KEY_FIT = stringPreferencesKey("fit_mode")
         val KEY_TARGETS = stringPreferencesKey("enabled_targets")

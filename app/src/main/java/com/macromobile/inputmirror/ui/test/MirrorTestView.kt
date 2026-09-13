@@ -9,6 +9,8 @@ import android.graphics.Path
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import com.macromobile.inputmirror.input.MappedPoint
+import com.macromobile.inputmirror.input.ScreenGeometry
 import com.macromobile.inputmirror.input.TouchPoint
 import com.macromobile.inputmirror.model.Region
 import kotlin.math.roundToInt
@@ -39,8 +41,22 @@ class MirrorTestView @JvmOverloads constructor(
     var onMasterUp: ((List<TouchPoint>) -> Unit)? = null
     var onMasterCancel: (() -> Unit)? = null
 
-    /** 영역이 정해지면 알려준다. 좌표 변환기를 다시 만들기 위해 필요하다. */
-    var onAreasChanged: ((master: Region, targets: List<Region>) -> Unit)? = null
+    /**
+     * 영역이 정해지면 알려준다.
+     *
+     * 영역은 **View 공간**이고, [ScreenGeometry] 는 그걸 화면 공간으로 옮기는 변환이다.
+     * 둘을 함께 넘겨야 받는 쪽이 어느 공간인지 헷갈리지 않는다.
+     */
+    var onAreasChanged: ((master: Region, targets: List<Region>, geometry: ScreenGeometry) -> Unit)? = null
+
+    /** 각 대상에 주입하려는 화면 좌표. 눈으로 오차를 확인하기 위해 표시한다. */
+    private val plannedScreenPoints = HashMap<String, MappedPoint>()
+
+    /** 각 대상의 마지막 결과 문자열. COMPLETED / CANCELLED 등. */
+    private val lastResults = HashMap<String, String>()
+
+    /** 화면상 원점. 그릴 때 화면 좌표를 View 좌표로 되돌리는 데 쓴다. */
+    private var geometry: ScreenGeometry = ScreenGeometry.IDENTITY
 
     val areas = listOf(
         TestArea("MASTER", isMaster = true),
@@ -79,6 +95,10 @@ class MirrorTestView @JvmOverloads constructor(
         strokeJoin = Paint.Join.ROUND
     }
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val plannedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+    }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -94,14 +114,56 @@ class MirrorTestView @JvmOverloads constructor(
         areas[1].region = Region.of(halfW, 0, w - halfW, halfH)
         areas[2].region = Region.of(0, halfH, halfW, h - halfH)
         areas[3].region = Region.of(halfW, halfH, w - halfW, h - halfH)
-        onAreasChanged?.invoke(areas[0].region, areas.drop(1).map { it.region })
+        publishAreas()
+    }
+
+    /**
+     * 영역과 화면 위치를 함께 알린다.
+     *
+     * 화면상 위치는 레이아웃이 끝나야 정확하므로 [onAttachedToWindow] 와 레이아웃 이후에도
+     * 다시 알린다. 여기서 한 번 틀리면 주입 좌표가 통째로 어긋난다.
+     */
+    private fun publishAreas() {
+        if (width <= 0 || height <= 0) return
+        geometry = ScreenGeometry.of(this)
+        onAreasChanged?.invoke(areas[0].region, areas.drop(1).map { it.region }, geometry)
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        // 창이 움직이거나 인셋이 바뀌면 화면상 원점도 바뀐다. 매번 다시 읽는다.
+        publishAreas()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        post { publishAreas() }
+    }
+
+    /** 전송기가 계산한 주입 좌표(화면 공간)를 받아 표시한다. */
+    fun showPlannedPoints(points: Map<String, MappedPoint>) {
+        plannedScreenPoints.clear()
+        plannedScreenPoints.putAll(points)
+        invalidate()
+    }
+
+    /** 대상별 마지막 결과를 받아 표시한다. */
+    fun showResults(results: Map<String, String>) {
+        lastResults.clear()
+        lastResults.putAll(results)
+        invalidate()
     }
 
     fun clearTraces() {
         traces.clear()
         lastPoint.clear()
+        plannedScreenPoints.clear()
+        lastResults.clear()
         invalidate()
     }
+
+    /** 지금 화면상 원점. 바깥에서 환경 정보를 찍을 때 쓴다. */
+    fun currentGeometry(): ScreenGeometry = geometry
 
     // ------------------------------------------------------------------
     // 터치 처리
@@ -242,10 +304,34 @@ class MirrorTestView @JvmOverloads constructor(
             val localX = (p.x - r.left).roundToInt()
             val localY = (p.y - r.top).roundToInt()
             canvas.drawText(
-                "화면 (${p.x.roundToInt()}, ${p.y.roundToInt()})",
+                "view (${p.x.roundToInt()}, ${p.y.roundToInt()}) → " +
+                    "screen (${geometry.toScreenX(p.x).roundToInt()}, " +
+                    "${geometry.toScreenY(p.y).roundToInt()})",
                 r.left + 22f, r.bottom - 58f, infoPaint,
             )
-            canvas.drawText("영역 ($localX, $localY)", r.left + 22f, r.bottom - 26f, infoPaint)
+            canvas.drawText("영역 안 ($localX, $localY)", r.left + 22f, r.bottom - 26f, infoPaint)
+        }
+
+        lastResults[area.name]?.let { result ->
+            infoPaint.color = if (result.startsWith("COMPLETED")) OK_COLOR else FAIL_COLOR
+            canvas.drawText(result, r.left + 22f, r.top + 116f, infoPaint)
+            infoPaint.color = INFO_COLOR
+        }
+
+        // 주입하려는 위치를 다른 모양으로 표시한다. 실제 그려진 선과 어긋나면 좌표 문제다.
+        plannedScreenPoints[area.name]?.let { planned ->
+            val vx = geometry.toViewX(planned.x)
+            val vy = geometry.toViewY(planned.y)
+            plannedPaint.color = PLANNED_COLOR
+            canvas.drawLine(vx - 26f, vy, vx + 26f, vy, plannedPaint)
+            canvas.drawLine(vx, vy - 26f, vx, vy + 26f, plannedPaint)
+            canvas.drawCircle(vx, vy, 20f, plannedPaint)
+            infoPaint.color = PLANNED_COLOR
+            canvas.drawText(
+                "주입 예정 (${planned.x.toInt()}, ${planned.y.toInt()})",
+                r.left + 22f, r.bottom - 90f, infoPaint,
+            )
+            infoPaint.color = INFO_COLOR
         }
 
         tracePaint.color = accent
@@ -270,5 +356,11 @@ class MirrorTestView @JvmOverloads constructor(
         val TARGET_COLOR = Color.rgb(110, 220, 140)
         val MASTER_BG = Color.rgb(24, 34, 52)
         val TARGET_BG = Color.rgb(22, 40, 32)
+
+        /** 주입하려는 위치. 실제 전달된 터치(초록)와 겹치는지 눈으로 비교한다. */
+        val PLANNED_COLOR = Color.rgb(255, 190, 70)
+        val OK_COLOR = Color.rgb(120, 230, 150)
+        val FAIL_COLOR = Color.rgb(255, 120, 120)
+        val INFO_COLOR = Color.argb(220, 210, 220, 235)
     }
 }

@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.macromobile.inputmirror.model.DispatchMode
 import com.macromobile.inputmirror.model.FitMode
 import com.macromobile.inputmirror.model.MirrorMode
 import com.macromobile.inputmirror.model.MirrorSettings
@@ -63,6 +64,26 @@ fun SettingsScreen(viewModel: MirrorViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "대상 앱이 너무 빠른 입력을 놓칠 때만 지연을 주세요. 기본은 없음입니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            SectionCard(
+                title = "대상이 여럿일 때 (MODE A/B/C)",
+                subtitle = settings.dispatchMode.description,
+            ) {
+                DropdownField(
+                    label = "전달 방식",
+                    options = DispatchMode.entries,
+                    selected = settings.dispatchMode,
+                    optionLabel = { it.koreanLabel },
+                    onSelect = { m -> viewModel.updateSettings { it.copy(dispatchMode = m) } },
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "어느 방식이 실제로 통하는지 성공률로 비교하세요. " +
+                        "MODE A 부터 확인하는 것이 순서입니다.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
