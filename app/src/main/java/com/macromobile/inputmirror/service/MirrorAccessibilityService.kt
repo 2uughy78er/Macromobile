@@ -11,8 +11,14 @@ import android.view.View
 import com.macromobile.inputmirror.model.MirrorRegion
 import com.macromobile.inputmirror.model.Region
 import com.macromobile.inputmirror.model.ScreenFingerprint
+import com.macromobile.inputmirror.MirrorApp
+import com.macromobile.inputmirror.mirror.MirrorEngine
 import com.macromobile.inputmirror.overlay.OverlayController
 import com.macromobile.inputmirror.overlay.RegionEditorView
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import android.view.accessibility.AccessibilityEvent
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -63,9 +69,26 @@ class MirrorAccessibilityService : AccessibilityService() {
     var overlay: OverlayController? = null
         private set
 
+    /**
+     * 미러링 엔진.
+     *
+     * Activity 가 아니라 여기 산다. 사용자가 게임을 하는 동안 우리 화면은 떠 있지 않기
+     * 때문이다. Activity 에 매어두면 그때 미러링이 멈춘다.
+     */
+    var engine: MirrorEngine? = null
+        private set
+
+    /** 서비스가 사는 동안만 유지되는 코루틴 범위. */
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         overlay = OverlayController(this)
+        engine = MirrorEngine(
+            service = this,
+            scope = serviceScope,
+            logStore = MirrorApp.container().logStore,
+        )
         serviceInfo = (serviceInfo ?: AccessibilityServiceInfo()).apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
@@ -86,6 +109,8 @@ class MirrorAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
+        engine?.stop()
+        engine = null
         overlay?.removeAll()
         overlay = null
         instanceFlow.value = null
@@ -94,9 +119,12 @@ class MirrorAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        engine?.stop()
+        engine = null
         overlay?.removeAll()
         overlay = null
         instanceFlow.value = null
+        serviceScope.cancel()
         super.onDestroy()
     }
 
@@ -105,8 +133,12 @@ class MirrorAccessibilityService : AccessibilityService() {
         // 회전하거나 멀티윈도우 크기가 바뀌면 저장된 좌표는 더 이상 같은 곳을 가리키지
         // 않는다. 여기서 조용히 고치지 않고, 바뀐 사실만 알린다. 어떻게 할지는
         // 배치를 들고 있는 쪽이 사용자에게 물어 정한다.
-        screenFlow.value = overlay?.screenFingerprint() ?: ScreenFingerprint()
-        Log.i(TAG, "화면 구성 변경: ${screenFlow.value.describe()}")
+        val next = overlay?.screenFingerprint() ?: ScreenFingerprint()
+        val changed = !screenFlow.value.matches(next)
+        screenFlow.value = next
+        Log.i(TAG, "화면 구성 변경: ${next.describe()}")
+        // 좌표가 더 이상 같은 곳을 가리키지 않는다. 조용히 계속하지 않고 멈춘다.
+        if (changed) engine?.onScreenChanged()
     }
 
     // ------------------------------------------------------------------

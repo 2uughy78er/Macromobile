@@ -22,6 +22,14 @@ data class MirrorTarget(
     val id: String,
     val name: String,
     val transformer: CoordinateTransformer,
+    /**
+     * 이 대상에만 주는 지연(ms).
+     *
+     * 한 제스처에 묶어 보낼 때는 스트로크의 `startTime` 으로 들어간다. 대상마다 조금씩
+     * 늦춰 보내고 싶을 때 쓴다. 0 이라 해서 하드웨어 수준의 완전한 동시 입력이 되는 것은
+     * 아니다 — 시스템이 제스처를 풀어내는 순서와 시간은 우리가 정하지 못한다.
+     */
+    val delayMs: Long = 0L,
 )
 
 /**
@@ -113,6 +121,19 @@ class GestureDispatcher(
     /** View 좌표를 화면 좌표로 옮기는 변환. 테스트 뷰가 자리를 잡으면 채워진다. */
     @Volatile
     var geometry: ScreenGeometry = ScreenGeometry.IDENTITY
+
+    /**
+     * 주입 직전/직후에 부를 일.
+     *
+     * 본 모드에서는 MASTER 입력 오버레이를 잠시 터치 불가로 바꿔야 한다. 그러지 않으면
+     * 주입이 게임이 아니라 우리 오버레이로 되돌아온다. 그 처리를 전송기가 직접 알 필요는
+     * 없으므로 바깥에서 끼워 넣는다.
+     */
+    @Volatile
+    var beforeDispatch: (suspend () -> Unit)? = null
+
+    @Volatile
+    var afterDispatch: (suspend () -> Unit)? = null
 
     fun start() {
         stop()
@@ -312,7 +333,9 @@ class GestureDispatcher(
             DispatchMode.SEQUENTIAL -> plan.map { listOf(it) }
             DispatchMode.COMBINED -> listOf(plan)
         }
-        dispatchGroups(gestureId, phase, type, masterPoint, groups, duration, willContinue)
+        dispatchGroups(
+            gestureId, phase, type, masterPoint, groups, duration, willContinue, maxDuration,
+        )
     }
 
     /** 대상 하나에 대해 이번 구간에 그릴 화면 좌표 경로. */
@@ -363,6 +386,7 @@ class GestureDispatcher(
         groups: List<List<TargetPlan>>,
         duration: Long,
         willContinue: Boolean,
+        maxDuration: Long,
     ) {
         val service = MirrorAccessibilityService.instance ?: return
         val nextStrokes = arrayOfNulls<ActiveStroke>(targets.size)
@@ -386,9 +410,14 @@ class GestureDispatcher(
                 val previousStroke = chain?.strokes?.getOrNull(plan.index)?.stroke
                 val stroke = try {
                     if (previousStroke != null) {
+                        // 이어붙이는 구간은 앞 스트로크에 곧바로 붙어야 하므로 시작 시각이 0 이다.
                         previousStroke.continueStroke(path, 0L, duration, willContinue)
                     } else {
-                        GestureDescription.StrokeDescription(path, 0L, duration, willContinue)
+                        // 대상별 지연은 제스처 안에서의 시작 시각으로 표현한다.
+                        // 시작 시각 + 길이가 시스템 상한을 넘으면 접수 자체가 거부되므로 자른다.
+                        val startTime = plan.target.delayMs
+                            .coerceIn(0L, (maxDuration - duration).coerceAtLeast(0L))
+                        GestureDescription.StrokeDescription(path, startTime, duration, willContinue)
                     }
                 } catch (e: Exception) {
                     // 여기가 이어붙이기 규칙 위반이 드러나는 자리다. 메시지를 그대로 남긴다.
@@ -427,6 +456,7 @@ class GestureDispatcher(
             )
 
             var accepted: Boolean? = null
+            beforeDispatch?.invoke()
             val requestedAt = GestureTracer.now()
             val result = service.dispatch(builder.build()) { ok ->
                 accepted = ok
@@ -442,6 +472,7 @@ class GestureDispatcher(
                 )
             }
             val callbackAt = GestureTracer.now()
+            afterDispatch?.invoke()
 
             trace(
                 TraceEntry(
