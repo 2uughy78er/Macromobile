@@ -40,6 +40,15 @@ sealed interface DispatchResult {
     data class Cancelled(val reason: String) : DispatchResult
     data class Threw(val reason: String) : DispatchResult
 
+    /**
+     * 접수는 됐는데 콜백이 끝내 오지 않았다.
+     *
+     * `dispatchGesture` 가 true 를 돌려줬는데 onCompleted/onCancelled 중 어느 것도
+     * 오지 않는 경우가 실제로 있다. 기다리는 쪽이 영원히 매달리면 그 뒤의 모든 입력이
+     * 멈추므로, 일정 시간이 지나면 이 결과로 끊는다. **성공으로 치지 않는다.**
+     */
+    data class TimedOut(val reason: String) : DispatchResult
+
     /** 사용자에게 보여줄 사유. 성공이면 빈 문자열. */
     val message: String
         get() = when (this) {
@@ -47,6 +56,7 @@ sealed interface DispatchResult {
             is Rejected -> reason
             is Cancelled -> reason
             is Threw -> reason
+            is TimedOut -> reason
         }
 
     val isSuccess: Boolean get() = this is Success
@@ -203,10 +213,12 @@ class MirrorAccessibilityService : AccessibilityService() {
     ): DispatchResult = suspendCancellableCoroutine { cont ->
         val callback = object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
+                Log.i(TAG, "GESTURE_CALLBACK onCompleted")
                 if (cont.isActive) cont.resume(DispatchResult.Success)
             }
 
             override fun onCancelled(gestureDescription: GestureDescription?) {
+                Log.w(TAG, "GESTURE_CALLBACK onCancelled")
                 if (cont.isActive) {
                     cont.resume(
                         DispatchResult.Cancelled(
@@ -227,6 +239,7 @@ class MirrorAccessibilityService : AccessibilityService() {
             }
             return@suspendCancellableCoroutine
         }
+        Log.i(TAG, "DISPATCH_RESULT accepted=$accepted")
         onAccepted(accepted)
         if (!accepted && cont.isActive) {
             cont.resume(

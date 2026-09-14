@@ -13,7 +13,7 @@ enum class TraceStage {
 
 /** 제스처가 어떻게 끝났는지. */
 enum class TraceResult {
-    PENDING, COMPLETED, CANCELLED, REJECTED, EXCEPTION
+    PENDING, COMPLETED, CANCELLED, REJECTED, EXCEPTION, TIMEOUT
 }
 
 /**

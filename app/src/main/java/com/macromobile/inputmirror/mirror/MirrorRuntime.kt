@@ -136,3 +136,29 @@ data class ProbeResult(
         }
     }
 }
+
+/**
+ * 연속 입력 재현 테스트 결과.
+ *
+ * 중요한 것은 성공률이 아니라 **처음 실패한 회차**다. "한동안 되다가 깨진다"는 증상은
+ * 그 번호가 있어야 좁힐 수 있다.
+ */
+data class StressResult(
+    val name: String,
+    val rounds: Int,
+    /** 처음 실패한 회차(1부터). 끝까지 성공했으면 null. */
+    val firstFailureAt: Int?,
+    val perTarget: Map<String, Map<String, Int>>,
+) {
+    val allOk: Boolean get() = firstFailureAt == null && perTarget.isNotEmpty()
+
+    fun summary(): String = buildString {
+        append(if (allOk) "✔ " else "✘ ")
+        append(name)
+        append(if (firstFailureAt == null) "  전부 성공" else "  ${firstFailureAt}회차부터 실패")
+        perTarget.forEach { (target, counts) ->
+            append("\n    ").append(target).append(": ")
+            append(counts.entries.joinToString(" ") { "${it.key}=${it.value}" })
+        }
+    }
+}

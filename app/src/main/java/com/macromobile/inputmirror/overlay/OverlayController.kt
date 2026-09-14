@@ -137,12 +137,30 @@ class OverlayController(private val service: AccessibilityService) {
      * 터치 가능한 창으로 간다. 우리 오버레이가 그 자리에 터치 가능 상태로 있으면 주입이
      * 게임이 아니라 우리에게 되돌아온다.
      */
-    fun setTouchable(key: String, touchable: Boolean): Boolean = update(key) { params ->
-        params.flags = if (touchable) {
-            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-        } else {
-            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+    fun setTouchable(key: String, touchable: Boolean): Boolean {
+        val applied = update(key) { params ->
+            params.flags = if (touchable) {
+                params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            } else {
+                params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            }
         }
+        Log.i(
+            TAG,
+            "OVERLAY_TOUCHABLE key=$key → $touchable applied=$applied",
+        )
+        return applied
+    }
+
+    /**
+     * 이 오버레이가 지금 터치를 받는 상태인가.
+     *
+     * 창이 없으면 null. 주입이 끝났는데 false 로 남아 있으면 입력이 영영 막힌 것이므로,
+     * 바깥에서 이 값을 확인해 되돌릴 수 있어야 한다.
+     */
+    fun isTouchable(key: String): Boolean? {
+        val entry = shown[key] ?: return null
+        return entry.params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE == 0
     }
 
     fun moveTo(key: String, region: Region): Boolean = update(key) { params ->

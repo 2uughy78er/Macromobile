@@ -16,6 +16,7 @@ import com.macromobile.inputmirror.model.DispatchMode
 import com.macromobile.inputmirror.model.LayoutStatus
 import com.macromobile.inputmirror.model.MirrorLayout
 import com.macromobile.inputmirror.model.MirrorSettings
+import com.macromobile.inputmirror.model.Region
 import com.macromobile.inputmirror.overlay.FloatingControlView
 import com.macromobile.inputmirror.overlay.MasterInputView
 import com.macromobile.inputmirror.service.MirrorAccessibilityService
@@ -70,6 +71,7 @@ class MirrorEngine(
         // 주입이 우리 오버레이로 되돌아오지 않도록 잠시 터치를 받지 않게 한다.
         beforeDispatch = { setMasterOverlayTouchable(false) }
         afterDispatch = { setMasterOverlayTouchable(true) }
+        overlayTouchable = { service.overlay?.isTouchable(KEY_MASTER_INPUT) }
     }
 
     private var layout: MirrorLayout = MirrorLayout()
@@ -233,6 +235,11 @@ class MirrorEngine(
         dispatcher.inputDelayMs = settings.inputDelayMs
         logStore.writeToFile = settings.saveLogToFile
         dispatcher.targets = buildTargets()
+
+        // 주입 좌표가 화면 밖으로 나가는지 전송기가 스스로 검사할 수 있게 경계를 알려준다.
+        service.screenFingerprint().takeIf { it.isKnown }?.let { screen ->
+            dispatcher.displayBounds = Region(0, 0, screen.width, screen.height)
+        }
     }
 
     /**
@@ -292,6 +299,26 @@ class MirrorEngine(
 
     private fun setMasterOverlayTouchable(touchable: Boolean) {
         service.overlay?.setTouchable(KEY_MASTER_INPUT, touchable)
+        MirrorRuntime.addLog(
+            "OVERLAY ${if (touchable) "TOUCHABLE" else "NOT_TOUCHABLE"} " +
+                "(실제=${service.overlay?.isTouchable(KEY_MASTER_INPUT)})",
+        )
+    }
+
+    /**
+     * 제스처 사이에는 MASTER 오버레이가 반드시 터치를 받는 상태여야 한다.
+     *
+     * 주입 도중 무언가 잘못되어 NOT_TOUCHABLE 로 남으면 그 뒤로 MASTER 입력이 영영
+     * 우리에게 오지 않는다. 실제로 그렇게 죽는 문제가 있었으므로, 상태를 확인하고
+     * 어긋나 있으면 되돌린다. 조건을 만족하는지 **확인한 뒤에만** 손댄다.
+     */
+    private fun healOverlayIfStuck() {
+        if (!state.deliversInput) return
+        val controller = service.overlay ?: return
+        if (controller.isTouchable(KEY_MASTER_INPUT) == false) {
+            MirrorRuntime.addLog("OVERLAY 복구 — 주입이 끝났는데 터치 불가 상태로 남아 있었습니다.")
+            controller.setTouchable(KEY_MASTER_INPUT, true)
+        }
     }
 
     /**
@@ -358,7 +385,15 @@ class MirrorEngine(
     // ------------------------------------------------------------------
 
     private fun handleDown(point: TouchPoint) {
-        if (!state.deliversInput) return
+        MirrorRuntime.addLog(
+            "MASTER_TOUCH DOWN (${point.x.toInt()},${point.y.toInt()})  " +
+                "engine=$state targets=${dispatcher.targets.size} " +
+                "recognizer=${recognizer.state}",
+        )
+        if (!state.deliversInput) {
+            MirrorRuntime.addLog("  ↳ 무시됨: 지금 상태($state)에서는 입력을 전달하지 않습니다.")
+            return
+        }
         val session = recognizer.onDown(point)
         MirrorRuntime.addLog(GestureLog.down(session))
         logStore.note(GestureLog.down(session))
@@ -380,8 +415,15 @@ class MirrorEngine(
     }
 
     private fun handleUp(point: TouchPoint) {
+        MirrorRuntime.addLog(
+            "MASTER_TOUCH UP (${point.x.toInt()},${point.y.toInt()})  " +
+                "engine=$state recognizer=${recognizer.state}",
+        )
         if (!state.deliversInput) return
-        val outcome = recognizer.onUp(point) ?: return
+        val outcome = recognizer.onUp(point) ?: run {
+            MirrorRuntime.addLog("  ↳ 진행 중인 제스처가 없어 UP 을 버립니다.")
+            return
+        }
         val session = outcome.session
         val line = GestureLog.up(outcome)
         MirrorRuntime.addLog(line)
@@ -421,6 +463,7 @@ class MirrorEngine(
     }
 
     private fun handleCancel() {
+        MirrorRuntime.addLog("MASTER_TOUCH CANCEL  engine=$state")
         val session = recognizer.onCancel() ?: return
         MirrorRuntime.addLog(GestureLog.cancel(session))
         dispatcher.submitCancel(session.id)
@@ -432,7 +475,10 @@ class MirrorEngine(
 
     private fun onDispatchRecord(record: MirrorRecord) {
         logStore.add(record)
-        scope.launch { recordTargetResults(record) }
+        scope.launch {
+            recordTargetResults(record)
+            healOverlayIfStuck()
+        }
     }
 
     private fun recordTargetResults(record: MirrorRecord) {
@@ -531,6 +577,103 @@ class MirrorEngine(
             dispatcher.dispatchMode = originalMode
         }
         return results
+    }
+
+    // ------------------------------------------------------------------
+    // 재현 테스트 — 어느 회차부터 깨지는지 찾는다
+    // ------------------------------------------------------------------
+
+    /** 합성 제스처 하나를 판정기와 전송기에 흘리고 대상별 결과를 받아온다. */
+    private suspend fun playSynthetic(points: List<TouchPoint>, gapMs: Long): Map<String, String> {
+        val session = recognizer.onDown(points.first())
+        points.drop(1).dropLast(1).forEach { recognizer.onMove(it) }
+        val outcome = recognizer.onUp(points.last()) ?: return emptyMap()
+        dispatcher.submitWholeGesture(outcome)
+        delay(gapMs)
+        return tracer.snapshot()
+            .filter { it.stage == TraceStage.CALLBACK && it.gestureId == session.id }
+            .flatMap { entry -> entry.targetNames.map { it to entry.result.name } }
+            .toMap()
+    }
+
+    private fun tapPoints(cx: Float, cy: Float): List<TouchPoint> {
+        val now = System.currentTimeMillis()
+        return listOf(
+            TouchPoint(cx, cy, now),
+            TouchPoint(cx, cy, now + TAP_HOLD_MS),
+        )
+    }
+
+    private fun dragPoints(cx: Float, cy: Float, span: Float): List<TouchPoint> {
+        val now = System.currentTimeMillis()
+        return (0..8).map { i ->
+            TouchPoint(cx + span * i / 8f, cy, now + i * 25L)
+        }
+    }
+
+    /**
+     * 연속 입력에서 어느 회차부터 깨지는지 찾는다.
+     *
+     * "한동안 잘 되다가 어느 순간부터 전송이 안 된다"는 증상은 한 번 재현해서는
+     * 잡히지 않는다. 같은 동작을 여러 번 반복하면서 **처음 실패한 회차 번호**를
+     * 기록해야 원인을 좁힐 수 있다.
+     */
+    suspend fun runStressSequences(
+        onProgress: (String) -> Unit = {},
+    ): List<StressResult> {
+        val master = layout.master ?: return emptyList()
+        if (state != MirrorState.RUNNING) {
+            MirrorRuntime.addFailure(
+                MirrorFailure(MirrorError.SERVICE_ERROR, "먼저 START 를 눌러주세요."),
+            )
+            return emptyList()
+        }
+        val cx = master.bounds.centerX.toFloat()
+        val cy = master.bounds.centerY.toFloat()
+        val span = (master.bounds.width * 0.3f)
+
+        data class Scenario(
+            val name: String,
+            val rounds: Int,
+            val gapMs: Long,
+            val build: (Int) -> List<TouchPoint>,
+        )
+
+        val scenarios = listOf(
+            Scenario("A · TAP ×20", 20, 350) { tapPoints(cx, cy) },
+            Scenario("B · DRAG ×20", 20, 400) { dragPoints(cx, cy, span) },
+            Scenario("C · 연속 TAP ×20 (간격 짧게)", 20, 150) { tapPoints(cx, cy) },
+            Scenario("D · DRAG→TAP 번갈아 ×20", 20, 350) { index ->
+                if (index % 2 == 0) dragPoints(cx, cy, span) else tapPoints(cx, cy)
+            },
+            Scenario("E · 빠른 TAP ×20 (간격 60ms)", 20, 60) { tapPoints(cx, cy) },
+        )
+
+        val out = ArrayList<StressResult>()
+        for (scenario in scenarios) {
+            val totals = LinkedHashMap<String, LinkedHashMap<String, Int>>()
+            var firstFailure: Int? = null
+            for (round in 1..scenario.rounds) {
+                onProgress("${scenario.name}  $round/${scenario.rounds}")
+                val results = playSynthetic(scenario.build(round - 1), scenario.gapMs)
+                if (results.isEmpty() || results.values.any { it != "COMPLETED" }) {
+                    if (firstFailure == null) firstFailure = round
+                }
+                results.forEach { (name, result) ->
+                    val counts = totals.getOrPut(name) { LinkedHashMap() }
+                    counts[result] = (counts[result] ?: 0) + 1
+                }
+                if (results.isEmpty()) {
+                    val counts = totals.getOrPut("(응답 없음)") { LinkedHashMap() }
+                    counts["NO_CALLBACK"] = (counts["NO_CALLBACK"] ?: 0) + 1
+                }
+            }
+            val result = StressResult(scenario.name, scenario.rounds, firstFailure, totals)
+            out += result
+            MirrorRuntime.addLog(result.summary())
+            healOverlayIfStuck()
+        }
+        return out
     }
 
     fun traceDump(): String = tracer.dump()

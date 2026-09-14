@@ -11,6 +11,7 @@ import com.macromobile.inputmirror.mirror.MirrorFailure
 import com.macromobile.inputmirror.mirror.MirrorRuntime
 import com.macromobile.inputmirror.mirror.MirrorState
 import com.macromobile.inputmirror.mirror.ProbeResult
+import com.macromobile.inputmirror.mirror.StressResult
 import com.macromobile.inputmirror.model.MirrorLayout
 import com.macromobile.inputmirror.model.MirrorRegion
 import com.macromobile.inputmirror.model.MirrorSettings
@@ -53,6 +54,9 @@ class SetupViewModel(app: Application) : AndroidViewModel(app) {
     /** 주입 가능성 측정 결과. 비어 있으면 아직 재보지 않은 것이다. */
     private val _probeResults = MutableStateFlow<List<ProbeResult>>(emptyList())
     val probeResults: StateFlow<List<ProbeResult>> = _probeResults.asStateFlow()
+
+    private val _stressResults = MutableStateFlow<List<StressResult>>(emptyList())
+    val stressResults: StateFlow<List<StressResult>> = _stressResults.asStateFlow()
 
     private val _probeProgress = MutableStateFlow<String?>(null)
     val probeProgress: StateFlow<String?> = _probeProgress.asStateFlow()
@@ -243,6 +247,24 @@ class SetupViewModel(app: Application) : AndroidViewModel(app) {
             _probeProgress.value = null
         }
     }
+
+    /** 연속 입력에서 어느 회차부터 깨지는지 찾는다. */
+    fun runStressSequences() {
+        val engine = MirrorAccessibilityService.instance?.engine ?: run {
+            reportNotConnected()
+            return
+        }
+        viewModelScope.launch {
+            _stressResults.value = emptyList()
+            _stressResults.value = engine.runStressSequences { progress ->
+                _probeProgress.value = progress
+            }
+            _probeProgress.value = null
+        }
+    }
+
+    /** 엔진이 남긴 단계별 로그. 어디서 끊겼는지 확인하는 데 쓴다. */
+    val engineLog = MirrorRuntime.gestureLog
 
     fun clearRecords() {
         MirrorRuntime.clearRecords()

@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import com.macromobile.inputmirror.input.ScreenGeometry
@@ -87,6 +88,10 @@ class MasterInputView(
         color = Color.argb(150, 12, 18, 28)
     }
 
+    private companion object {
+        const val TAG = "MasterInputView"
+    }
+
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         super.onLayout(changed, left, top, right, bottom)
         geometry = ScreenGeometry.of(this)
@@ -109,6 +114,14 @@ class MasterInputView(
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // 이 뷰가 이벤트를 받았다는 사실 자체를 먼저 남긴다. "터치가 안 간다"와
+        // "터치는 왔는데 전달이 안 된다"를 구분하려면 이 줄이 있어야 한다.
+        Log.i(
+            TAG,
+            "MASTER_INPUT ${actionName(event.actionMasked)} " +
+                "(${event.x.toInt()},${event.y.toInt()}) pointers=${event.pointerCount} " +
+                "active=$active tracking=$pointerId",
+        )
         if (!active) return false
         val now = System.currentTimeMillis()
 
@@ -155,6 +168,16 @@ class MasterInputView(
             }
         }
         return true
+    }
+
+    private fun actionName(action: Int): String = when (action) {
+        MotionEvent.ACTION_DOWN -> "ACTION_DOWN"
+        MotionEvent.ACTION_MOVE -> "ACTION_MOVE"
+        MotionEvent.ACTION_UP -> "ACTION_UP"
+        MotionEvent.ACTION_CANCEL -> "ACTION_CANCEL"
+        MotionEvent.ACTION_POINTER_DOWN -> "ACTION_POINTER_DOWN"
+        MotionEvent.ACTION_POINTER_UP -> "ACTION_POINTER_UP"
+        else -> "ACTION_$action"
     }
 
     private fun flush() {

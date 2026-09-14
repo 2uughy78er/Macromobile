@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 대상 하나.
@@ -135,13 +136,30 @@ class GestureDispatcher(
     @Volatile
     var afterDispatch: (suspend () -> Unit)? = null
 
+    /** 지금 MASTER 오버레이가 터치를 받는 상태인지. 로그에 그대로 남긴다. */
+    @Volatile
+    var overlayTouchable: (() -> Boolean?)? = null
+
+    /**
+     * 화면 경계. 주입 좌표가 이 밖으로 나가면 보내지 않는다.
+     *
+     * 화면이 회전하거나 창 크기가 바뀐 뒤 옛 좌표가 그대로 쓰이면 엉뚱한 곳이 눌린다.
+     * 조용히 자르지 않고 거부하고 이유를 남긴다.
+     */
+    @Volatile
+    var displayBounds: com.macromobile.inputmirror.model.Region? = null
+
     fun start() {
         stop()
         val channel = Channel<Command>(Channel.UNLIMITED)
         commands = channel
         scope.launch {
             for (command in channel) {
-                runCatching { handle(command) }.onFailure { error ->
+                // 명령이 어떻게 끝나든 — 성공이든 예외든 — 오버레이를 터치 가능으로
+                // 되돌린다. 이걸 빠뜨리면 주입 한 번 실패한 뒤로 MASTER 입력이
+                // 영영 우리에게 오지 않는다.
+                runCatching { handle(command) }.also { afterDispatch?.invoke() }
+                    .onFailure { error ->
                     // 여기서 삼키면 실패가 화면에 보이지 않는다. 반드시 기록으로 남긴다.
                     Log.e(TAG, "명령 처리 실패", error)
                     chain = null
@@ -292,6 +310,28 @@ class GestureDispatcher(
         val plan = buildPlan(points, currentTargets) ?: run {
             fail(gestureId, phase, type, masterPoint, emptyMap(), "좌표를 변환하지 못했습니다.")
             return
+        }
+
+        // 주입 좌표가 화면 밖으로 나가면 보내지 않는다. 화면이 바뀐 뒤 옛 좌표가 그대로
+        // 쓰이면 엉뚱한 곳이 눌리기 때문이다. 조용히 자르지 않고 거부하고 이유를 남긴다.
+        displayBounds?.let { screen ->
+            val offScreen = plan.firstNotNullOfOrNull { target ->
+                target.screenPath.firstOrNull { point ->
+                    point.x < screen.left || point.x >= screen.right ||
+                        point.y < screen.top || point.y >= screen.bottom
+                }?.let { target to it }
+            }
+            if (offScreen != null) {
+                val (target, point) = offScreen
+                fail(
+                    gestureId, phase, type, masterPoint, plan.endPoints(),
+                    "${target.target.name} 의 주입 좌표 " +
+                        "(${point.x.toInt()}, ${point.y.toInt()}) 가 화면 " +
+                        "${screen.width}×${screen.height} 밖입니다. " +
+                        "화면 구성이 바뀌었을 수 있으니 영역을 다시 확인해주세요.",
+                )
+                return
+            }
         }
 
         // 대상 수가 시스템 한계를 넘으면 묶어 보낼 수 없다. 조용히 자르지 않고 알린다.
@@ -452,27 +492,52 @@ class GestureDispatcher(
                     elapsedNanos = GestureTracer.now(),
                     phase = phase,
                     targetNames = builtFor.map { it.first.target.name },
+                    strokeCount = builtFor.size,
+                    durationMs = duration,
+                    detail = builtFor.joinToString(" | ") { (plan, _) ->
+                        val first = plan.screenPath.first()
+                        val last = plan.screenPath.last()
+                        "#${plan.index} ${plan.target.name} " +
+                            "(${first.x.toInt()},${first.y.toInt()})→" +
+                            "(${last.x.toInt()},${last.y.toInt()}) " +
+                            "start=${plan.target.delayMs}ms"
+                    } + "  overlayTouchable=${overlayTouchable?.invoke()}",
                 ),
             )
 
             var accepted: Boolean? = null
+            val requestedAt: Long
+            val result: DispatchResult
+            // 콜백이 끝내 오지 않는 경우가 있다. 그때 영원히 기다리면 이 코루틴 하나가
+            // 막히면서 **그 뒤의 모든 입력이 멈춘다.** 그래서 상한을 두고, 넘으면
+            // 성공이 아니라 TimedOut 으로 끊어 기록한다. 문제를 숨기는 것이 아니라
+            // 드러내면서 파이프라인을 살려두기 위함이다.
+            val waitMs = duration + maxDelayMs(group) + CALLBACK_GRACE_MS
             beforeDispatch?.invoke()
-            val requestedAt = GestureTracer.now()
-            val result = service.dispatch(builder.build()) { ok ->
-                accepted = ok
-                trace(
-                    TraceEntry(
-                        gestureId = gestureId,
-                        stage = TraceStage.DISPATCH_RETURN,
-                        elapsedNanos = GestureTracer.now(),
-                        phase = phase,
-                        targetNames = builtFor.map { it.first.target.name },
-                        accepted = ok,
-                    ),
+            try {
+                requestedAt = GestureTracer.now()
+                result = withTimeoutOrNull(waitMs) {
+                    service.dispatch(builder.build()) { ok ->
+                        accepted = ok
+                        trace(
+                            TraceEntry(
+                                gestureId = gestureId,
+                                stage = TraceStage.DISPATCH_RETURN,
+                                elapsedNanos = GestureTracer.now(),
+                                phase = phase,
+                                targetNames = builtFor.map { it.first.target.name },
+                                accepted = ok,
+                            ),
+                        )
+                    }
+                } ?: DispatchResult.TimedOut(
+                    "제스처를 접수했지만 ${waitMs}ms 안에 완료/취소 콜백이 오지 않았습니다.",
                 )
+            } finally {
+                // 예외가 나든 코루틴이 취소되든 반드시 되돌린다.
+                afterDispatch?.invoke()
             }
             val callbackAt = GestureTracer.now()
-            afterDispatch?.invoke()
 
             trace(
                 TraceEntry(
@@ -487,6 +552,7 @@ class GestureDispatcher(
                         is DispatchResult.Cancelled -> TraceResult.CANCELLED
                         is DispatchResult.Rejected -> TraceResult.REJECTED
                         is DispatchResult.Threw -> TraceResult.EXCEPTION
+                        is DispatchResult.TimedOut -> TraceResult.TIMEOUT
                     },
                     durationMs = (callbackAt - requestedAt) / 1_000_000,
                     detail = result.message.ifBlank { null },
@@ -567,8 +633,15 @@ class GestureDispatcher(
 
     private fun trace(entry: TraceEntry) = tracer.add(entry)
 
+    /** 이 묶음에서 가장 늦게 시작하는 대상의 지연. 대기 상한 계산에 쓴다. */
+    private fun maxDelayMs(group: List<TargetPlan>): Long =
+        group.maxOfOrNull { it.target.delayMs.coerceAtLeast(0L) } ?: 0L
+
     private companion object {
         const val TAG = "GestureDispatcher"
+
+        /** 제스처 길이 위에 얹어 주는 콜백 대기 여유. */
+        const val CALLBACK_GRACE_MS = 3_000L
     }
 }
 

@@ -69,6 +69,8 @@ fun HomeScreen(
     val windowDump by viewModel.windowDump.collectAsStateWithLifecycle()
     val probeResults by viewModel.probeResults.collectAsStateWithLifecycle()
     val probeProgress by viewModel.probeProgress.collectAsStateWithLifecycle()
+    val stressResults by viewModel.stressResults.collectAsStateWithLifecycle()
+    val engineLog by viewModel.engineLog.collectAsStateWithLifecycle()
 
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
@@ -232,6 +234,56 @@ fun HomeScreen(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+            }
+
+            SectionCard(
+                title = "연속 입력 재현 테스트",
+                subtitle = "한동안 되다가 깨지는 문제를 잡기 위한 것입니다.",
+            ) {
+                Text(
+                    "TAP 20회 · DRAG 20회 · 연속 TAP · DRAG→TAP 번갈아 · 빠른 TAP 을 " +
+                        "차례로 흘려보내고, **처음 실패한 회차 번호**를 기록합니다. " +
+                        "성공률보다 그 번호가 원인을 좁혀줍니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { viewModel.runStressSequences() },
+                    enabled = state == MirrorState.RUNNING && probeProgress == null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(probeProgress ?: "재현 테스트 실행 (A~E)")
+                }
+                if (stressResults.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    stressResults.forEach { result ->
+                        Text(
+                            result.summary(),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = if (result.allOk) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.error
+                            },
+                        )
+                    }
+                }
+            }
+
+            SectionCard(
+                title = "단계 로그",
+                subtitle = "MASTER 터치 → 판정 → 주입 → 콜백 까지 어디서 끊겼는지.",
+                trailing = {
+                    TextButton(onClick = { viewModel.clearRecords() }) { Text("지우기") }
+                },
+            ) {
+                Text(
+                    engineLog.takeLast(25).joinToString("\n").ifBlank { "아직 기록이 없습니다." },
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                )
             }
 
             if (failures.isNotEmpty()) {
