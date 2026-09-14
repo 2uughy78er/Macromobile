@@ -298,6 +298,28 @@ fun HomeScreen(
                 )
             }
 
+            if (state == MirrorState.RUNNING || state == MirrorState.PAUSED) {
+                SectionCard(
+                    title = "메모리 아끼기",
+                    subtitle = "게임이 자꾸 꺼진다면 이 화면부터 내리세요.",
+                ) {
+                    Text(
+                        "미러링은 접근성 서비스가 돌립니다. 이 화면을 완전히 닫아도 계속 " +
+                            "동작하고, 떠 있는 버튼으로 정지할 수 있습니다. 화면을 닫으면 " +
+                            "Compose UI 가 쓰던 메모리가 반환되어 게임이 쓸 몫이 늘어납니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { activity?.finish() },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("앱 화면 완전히 닫기 (미러링은 계속)")
+                    }
+                }
+            }
+
             OutlinedButton(onClick = onOpenTestMode, modifier = Modifier.fillMaxWidth()) {
                 Text("테스트 모드 (빈 영역 4개로 검증)")
             }
