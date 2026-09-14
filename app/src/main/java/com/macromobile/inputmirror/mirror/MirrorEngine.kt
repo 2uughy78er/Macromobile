@@ -19,7 +19,9 @@ import com.macromobile.inputmirror.model.MirrorSettings
 import com.macromobile.inputmirror.overlay.FloatingControlView
 import com.macromobile.inputmirror.overlay.MasterInputView
 import com.macromobile.inputmirror.service.MirrorAccessibilityService
+import com.macromobile.inputmirror.storage.LayoutRepository
 import com.macromobile.inputmirror.storage.MirrorLogStore
+import com.macromobile.inputmirror.storage.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -50,6 +52,8 @@ class MirrorEngine(
     private val service: MirrorAccessibilityService,
     private val scope: CoroutineScope,
     private val logStore: MirrorLogStore,
+    layoutRepository: LayoutRepository,
+    settingsRepository: SettingsRepository,
 ) {
     private val tracer = GestureTracer()
     private val recognizer = GestureRecognizer()
@@ -82,6 +86,26 @@ class MirrorEngine(
 
     val state: MirrorState get() = MirrorRuntime.state.value
 
+    // 초기화 블록은 프로퍼티 선언보다 **뒤에** 두어야 한다. 코틀린은 선언 순서대로
+    // 초기화하므로, 위에 두면 dispatcher 가 아직 null 인 채로 코루틴이 돌 수 있다.
+    init {
+        // 저장된 배치와 설정을 스스로 따라간다. 그래야 앱 화면을 열지 않고도
+        // 떠 있는 버튼만으로 시작할 수 있다. 앱을 전체화면으로 띄우는 순간 게임들이
+        // 뒤로 밀려 메모리 부족으로 죽을 수 있으므로, 그 순간을 아예 없애기 위함이다.
+        scope.launch {
+            layoutRepository.layout.collect { saved ->
+                layout = saved
+                if (state == MirrorState.RUNNING || state == MirrorState.PAUSED) {
+                    dispatcher.targets = buildTargets()
+                }
+                ensureFloatingControl()
+            }
+        }
+        scope.launch {
+            settingsRepository.settings.collect { saved -> applySettings(saved) }
+        }
+    }
+
     // ------------------------------------------------------------------
     // 시작 / 일시정지 / 정지
     // ------------------------------------------------------------------
@@ -91,6 +115,9 @@ class MirrorEngine(
      *
      * 점검에 걸리면 **시작하지 않고 이유를 남긴다.** 반쯤 켜진 상태로 두지 않는다.
      */
+    /** 저장된 배치와 설정으로 시작한다. 떠 있는 버튼이 이걸 부른다. */
+    fun start(): Boolean = start(layout, settings)
+
     fun start(layout: MirrorLayout, settings: MirrorSettings): Boolean {
         this.layout = layout
         this.settings = settings
@@ -121,7 +148,7 @@ class MirrorEngine(
         tracer.reset()
         recognizer.reset()
         dispatcher.start()
-        showFloatingControl()
+        ensureFloatingControl()
         MirrorRuntime.setState(MirrorState.RUNNING)
         floatingView?.state = MirrorState.RUNNING
         MirrorRuntime.addLog("START — 대상 ${dispatcher.targets.size}개")
@@ -154,8 +181,8 @@ class MirrorEngine(
         dispatcher.stop()
         logStore.stopSession()
         hideMasterOverlay()
-        hideFloatingControl()
         MirrorRuntime.setState(MirrorState.STOPPED)
+        floatingView?.state = MirrorState.STOPPED
         MirrorRuntime.addLog("STOP")
     }
 
@@ -273,6 +300,23 @@ class MirrorEngine(
      * 사용자가 게임 안에 있을 때도 즉시 멈출 수 있어야 하므로, 우리 화면이 아니라
      * 오버레이로 띄운다. 화면을 덮지 않는 작은 버튼 하나다.
      */
+    /**
+     * 쓸 수 있는 배치가 있으면 조작 버튼을 띄워 둔다.
+     *
+     * 미러링을 켜지 않았을 때도 띄운다. START 를 누르러 앱을 전체화면으로 여는 순간이
+     * 게임이 죽는 가장 위험한 순간이기 때문이다. 그 순간을 없애는 것이 목적이다.
+     */
+    fun ensureFloatingControl() {
+        val usable = layout.master != null && layout.deliverableTargets.isNotEmpty()
+        if (!usable) {
+            hideFloatingControl()
+            return
+        }
+        if (service.overlay?.isShowing(KEY_FLOATING_CONTROL) == true) return
+        showFloatingControl()
+        floatingView?.state = MirrorRuntime.state.value
+    }
+
     private fun showFloatingControl() {
         val controller = service.overlay ?: return
         if (floatingX == 0 && floatingY == 0) {
@@ -282,6 +326,7 @@ class MirrorEngine(
         }
         val view = FloatingControlView(
             context = service,
+            onStart = { start() },
             onPauseOrResume = {
                 if (MirrorRuntime.state.value == MirrorState.PAUSED) resume() else pause()
             },

@@ -84,10 +84,13 @@ class MirrorAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         overlay = OverlayController(this)
+        val container = MirrorApp.container()
         engine = MirrorEngine(
             service = this,
             scope = serviceScope,
-            logStore = MirrorApp.container().logStore,
+            logStore = container.logStore,
+            layoutRepository = container.layoutRepository,
+            settingsRepository = container.settingsRepository,
         )
         serviceInfo = (serviceInfo ?: AccessibilityServiceInfo()).apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED

@@ -22,6 +22,8 @@ import kotlin.math.abs
  */
 class FloatingControlView(
     context: Context,
+    /** 멈춰 있을 때 누르면 시작한다. 앱을 열지 않고도 시작할 수 있어야 한다. */
+    private val onStart: () -> Unit,
     private val onPauseOrResume: () -> Unit,
     private val onStop: () -> Unit,
     /** 끌어서 옮길 때 창 위치를 바꿔달라고 알린다. */
@@ -63,7 +65,7 @@ class FloatingControlView(
     private var dragged = false
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        setMeasuredDimension(dp(232f).toInt(), dp(48f).toInt())
+        setMeasuredDimension(dp(248f).toInt(), dp(48f).toInt())
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
@@ -102,7 +104,10 @@ class FloatingControlView(
                 if (!dragged) {
                     when {
                         stopRect.contains(event.x, event.y) -> onStop()
-                        pauseRect.contains(event.x, event.y) -> onPauseOrResume()
+                        pauseRect.contains(event.x, event.y) -> when (state) {
+                            MirrorState.RUNNING, MirrorState.PAUSED -> onPauseOrResume()
+                            else -> onStart()
+                        }
                     }
                 }
                 return true
@@ -129,10 +134,21 @@ class FloatingControlView(
         canvas.drawText(state.koreanLabel, dp(30f), height / 2f + dp(5f), labelPaint)
 
         val buttonRadius = dp(10f)
-        buttonPaint.color = Color.argb(235, 60, 66, 80)
+        // 멈춰 있을 때는 이 버튼이 START 가 된다. 앱을 전체화면으로 띄우는 순간
+        // 게임들이 뒤로 밀려 메모리 부족으로 죽을 수 있으므로, 앱을 열지 않고
+        // 여기서 바로 시작할 수 있어야 한다.
+        val primaryLabel = when (state) {
+            MirrorState.RUNNING -> "❚❚ 정지"
+            MirrorState.PAUSED -> "▶ 재개"
+            else -> "▶ START"
+        }
+        buttonPaint.color = when (state) {
+            MirrorState.RUNNING, MirrorState.PAUSED -> Color.argb(235, 60, 66, 80)
+            else -> Color.argb(240, 60, 130, 240)
+        }
         canvas.drawRoundRect(pauseRect, buttonRadius, buttonRadius, buttonPaint)
         canvas.drawText(
-            if (state == MirrorState.PAUSED) "▶ 재개" else "❚❚ 정지",
+            primaryLabel,
             pauseRect.centerX(), pauseRect.centerY() + dp(4.5f), buttonTextPaint,
         )
 
