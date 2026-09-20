@@ -1,10 +1,14 @@
 package com.macromobile.imagemacro.preset
 
+import com.macromobile.imagemacro.model.ActionType
 import com.macromobile.imagemacro.model.Macro
+import com.macromobile.imagemacro.model.MacroStep
+import com.macromobile.imagemacro.model.OnTimeout
 import com.macromobile.imagemacro.model.Roi
 import com.macromobile.imagemacro.model.Target
 import com.macromobile.imagemacro.model.TargetMatchMode
 import com.macromobile.imagemacro.model.TargetSettings
+import com.macromobile.imagemacro.model.Template
 
 /**
  * 리세 목표카드 묶음 한 벌.
@@ -30,6 +34,24 @@ data class TargetPreset(
     val requiredConsecutiveMatches: Int,
     val monitorIntervalMs: Long,
     val cards: List<PresetCard>,
+    /** 목표카드가 아닐 때 눌러 다음 리세로 넘어가는 버튼. */
+    val confirmButton: PresetButton,
+    /** 단계 이미지가 들어 있는 assets 폴더. */
+    val stepAssetDir: String,
+)
+
+/**
+ * 결과 화면에서 눌러야 하는 버튼.
+ *
+ * 좌표가 아니라 **이미지**로 찾는다. 시간이나 고정 좌표로 누르면 연출 길이가 바뀌거나
+ * 해상도가 다를 때 엉뚱한 곳을 누르게 된다.
+ */
+data class PresetButton(
+    val assetFile: String,
+    val displayName: String,
+    /** 버튼을 찾을 영역(기준 해상도). 화면 전체를 뒤지지 않게 좁혀둔다. */
+    val searchRegion: Roi,
+    val threshold: Float,
 )
 
 /** 묶음에 들어 있는 카드 한 장. */
@@ -58,8 +80,22 @@ data class PresetCard(
  *   훑으면 자기 매칭은 1.000 이 나왔다. 그 사이를 넉넉히 잡아 0.82 로 둔다.
  *   JPEG 압축·밝기·블러는 0.98 이상이라 여유가 충분하다.
  *
- * **실기기 캡처로 다시 재야 하는 값이다.** 준 이미지는 창 모드 캡처로 보이므로,
- * 실제 MediaProjection 캡처에서 ROI 와 threshold 를 확인하고 필요하면 고쳐야 한다.
+ * ## 실기기 캡처로 검증했다 (2304×1440)
+ *
+ * 처음에는 참고 이미지 한 장으로 추정한 값이었는데, 같은 화면을 실기기에서 캡처해
+ * 다시 재보니 **레이아웃이 정확히 1.5배**였고(2304/1536 = 1440/960 = 1.5) 추정값이
+ * 그대로 맞았다. 실측 결과:
+ *
+ * - 확대 카드: 화면 좌표 x 994~1308, y 193~679 (약 314×486). 기준 해상도 환산 시
+ *   x 663~872, y 129~453 — 참고 이미지에서 잰 값과 1px 안쪽으로 일치한다.
+ * - 목표가 아닌 카드(이재원B)가 떠 있는 실제 화면에 9장을 매칭한 최고 점수 **0.430**.
+ *   threshold 0.82 와 큰 차이가 있어 오검출 여지가 없다.
+ * - 같은 화면의 카드 자리에 목표카드를 넣고 매칭하면 **0.981~0.990**, 이때 다른 카드와의
+ *   최대 유사도는 0.678 이었다.
+ * - 매칭된 폭은 화면 너비의 **0.1359** 로 크기 제한(0.105~0.175) 한가운데였다.
+ * - 작은 카드는 기기 좌표 y 760 부터 시작하고, ROI 아래끝은 719 라 41px 여유로 벗어난다.
+ *
+ * 그래서 이 값들은 추정이 아니라 실기기에서 확인된 값이다.
  */
 object RerollTargetPreset {
 
@@ -90,6 +126,16 @@ object RerollTargetPreset {
             PresetCard("target_08_gujaguk_24.png", "구자욱'24 71 LF 삼성"),
             PresetCard("target_09_leejeonghu_22.png", "이정후'22 77 CF 키움"),
         ),
+        // 실기기 캡처에서 [확인] 버튼은 (1066,1308) 크기 359x73 이었다.
+        // 기준 해상도(1536x960)로 환산하면 (711,872) 크기 239x49 다.
+        confirmButton = PresetButton(
+            assetFile = "confirm_button.png",
+            displayName = "확인",
+            // 버튼은 화면 아래쪽에만 있다. 위쪽 카드 영역을 뒤지지 않게 좁힌다.
+            searchRegion = Roi(x = 560, y = 820, width = 540, height = 140),
+            threshold = 0.88f,
+        ),
+        stepAssetDir = "presets/comprosepya_reroll/steps",
     )
 
     val ALL = listOf(COMPROSEPYA)
@@ -140,6 +186,90 @@ fun Macro.withPresetTargets(
             monitorIntervalMs = preset.monitorIntervalMs,
             requiredConsecutiveMatches = preset.requiredConsecutiveMatches,
             saveScreenshotOnFound = true,
+        ),
+        updatedAt = now,
+    )
+}
+
+/**
+ * 결과 화면 단계를 얹는다.
+ *
+ * 지시서 §5 가 금지한 "몇 초 기다렸다가 좌표 클릭" 을 쓰지 않는다. 화면에 무엇이 보이는지로
+ * 판단한다. §16 이 요구한 순서 — **목표 검사가 [확인] 터치보다 먼저** — 를 단계 순서로
+ * 못박는다.
+ *
+ * ```
+ * WAIT_FOR_IMAGE(확인 버튼)   결과 화면에 도달했는지 확인
+ *         ↓
+ * TARGET_CHECK               목표카드면 여기서 멈춘다 (TargetHit → RunState.TARGET_FOUND)
+ *         ↓ 목표가 아닐 때만
+ * WAIT_AND_TAP(확인 버튼)    다음 리세로
+ * ```
+ *
+ * 타겟 감시(`monitorEnabled`)도 함께 켜지므로, 단계 사이에서 카드가 떠도 잡힌다.
+ */
+fun Macro.withPresetResultSteps(
+    preset: TargetPreset,
+    now: Long,
+    confirmFileName: String?,
+): Macro {
+    val button = preset.confirmButton
+    // 이미지를 못 옮겼으면 단계를 만들지 않는다. 이미지 없는 단계는 언제나 시간만
+    // 끌다가 실패하는데, 화면에는 정상처럼 보여서 원인을 찾기 어렵다.
+    val stored = confirmFileName ?: return this
+
+    val template = Template(
+        name = button.displayName,
+        fileName = stored,
+        referenceScreenWidth = preset.referenceWidth,
+        referenceScreenHeight = preset.referenceHeight,
+        searchRegion = button.searchRegion,
+        threshold = button.threshold,
+        createdAt = now,
+    )
+
+    val steps = listOf(
+        MacroStep(
+            type = ActionType.WAIT_FOR_IMAGE,
+            name = "결과 화면 기다리기",
+            templateIds = listOf(template.id),
+            // 뽑기 연출이 길 수 있다. 버튼이 뜰 때까지는 넉넉히 기다린다.
+            timeoutMs = 40_000L,
+            pollIntervalMs = 200L,
+            afterDelayMs = 0L,
+            onTimeout = OnTimeout.RESTART,
+        ),
+        MacroStep(
+            type = ActionType.TARGET_CHECK,
+            name = "목표카드 검사 (확대 카드만)",
+            roi = preset.roi,
+            threshold = preset.threshold,
+            // 연출 중간 프레임을 거르되 빨리 멈춰야 한다. 카드가 자리를 잡는 데
+            // 걸리는 시간만 본다.
+            timeoutMs = 4_000L,
+            pollIntervalMs = preset.monitorIntervalMs,
+            afterDelayMs = 0L,
+            // 목표가 없으면 그냥 다음 단계로. 이게 정상 흐름이다.
+            onTimeout = OnTimeout.SKIP,
+        ),
+        MacroStep(
+            type = ActionType.WAIT_AND_TAP,
+            name = "확인 눌러 다음 리세로",
+            templateIds = listOf(template.id),
+            timeoutMs = 15_000L,
+            pollIntervalMs = 200L,
+            afterDelayMs = 800L,
+            onTimeout = OnTimeout.RESTART,
+        ),
+    )
+
+    return copy(
+        templates = templates.filterNot { it.name == button.displayName } + template,
+        steps = steps,
+        repeat = repeat.copy(
+            count = -1,              // 목표를 찾을 때까지 계속 돈다
+            stopOnTargetFound = true,
+            stopOnSuccess = false,
         ),
         updatedAt = now,
     )

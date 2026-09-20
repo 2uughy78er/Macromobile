@@ -24,26 +24,39 @@ class PresetImporter(
      */
     fun apply(macro: Macro, preset: TargetPreset, now: Long = System.currentTimeMillis()): Macro {
         val failed = ArrayList<String>()
-        val result = macro.withPresetTargets(preset, now) { card ->
-            copyAsset(macro.id, preset, card).also { saved ->
-                if (saved == null) failed += card.assetFile
-            }
+        val withTargets = macro.withPresetTargets(preset, now) { card ->
+            copy(macro.id, "${preset.assetDir}/${card.assetFile}", card.assetFile, asTarget = true)
+                .also { saved -> if (saved == null) failed += card.assetFile }
         }
+        val button = preset.confirmButton
+        val confirmFile = copy(
+            macro.id,
+            "${preset.stepAssetDir}/${button.assetFile}",
+            button.assetFile,
+            asTarget = false,
+        )
+        if (confirmFile == null) failed += button.assetFile
         if (failed.isNotEmpty()) {
-            Log.e(TAG, "목표카드 ${failed.size}장을 옮기지 못했습니다: ${failed.joinToString()}")
+            Log.e(TAG, "이미지 ${failed.size}개를 옮기지 못했습니다: ${failed.joinToString()}")
         }
-        return result
+        return withTargets.withPresetResultSteps(preset, now, confirmFile)
     }
 
-    /** 실패하면 null. 부른 쪽이 그 카드를 빼고 기록한다. */
-    private fun copyAsset(macroId: String, preset: TargetPreset, card: PresetCard): String? = try {
-        val dest = File(files.targetsDir(macroId), card.assetFile)
-        context.assets.open("${preset.assetDir}/${card.assetFile}").use { input ->
+    /** 실패하면 null. 부른 쪽이 그 항목을 빼고 기록한다. */
+    private fun copy(
+        macroId: String,
+        assetPath: String,
+        fileName: String,
+        asTarget: Boolean,
+    ): String? = try {
+        val dir = if (asTarget) files.targetsDir(macroId) else files.templatesDir(macroId)
+        val dest = File(dir, fileName)
+        context.assets.open(assetPath).use { input ->
             dest.outputStream().use { output -> input.copyTo(output) }
         }
-        if (dest.length() > 0) card.assetFile else null
+        if (dest.length() > 0) fileName else null
     } catch (e: Exception) {
-        Log.e(TAG, "목표카드 복사 실패: ${card.assetFile}", e)
+        Log.e(TAG, "이미지 복사 실패: $assetPath", e)
         null
     }
 

@@ -4,6 +4,9 @@ import com.macromobile.imagemacro.model.Macro
 import com.macromobile.imagemacro.model.TargetMatchMode
 import com.macromobile.imagemacro.preset.PresetCard
 import com.macromobile.imagemacro.preset.RerollTargetPreset
+import com.macromobile.imagemacro.model.ActionType
+import com.macromobile.imagemacro.model.OnTimeout
+import com.macromobile.imagemacro.preset.withPresetResultSteps
 import com.macromobile.imagemacro.preset.withPresetTargets
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -145,6 +148,81 @@ class RerollTargetPresetTest {
     @Test
     fun `자산 경로가 실제 폴더와 맞는다`() {
         assertEquals("presets/comprosepya_reroll/targets", preset.assetDir)
+    }
+
+    // ------------------------------------------------------------------
+    // 결과 화면 단계
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `목표 검사가 확인 터치보다 먼저 온다`() {
+        // §16: 목표카드가 떴는데 [확인] 이 먼저 눌리면 그 판을 날린다.
+        val applied = Macro().withPresetResultSteps(preset, now = 1L, confirmFileName = "c.png")
+        val types = applied.steps.map { it.type }
+        assertEquals(
+            listOf(ActionType.WAIT_FOR_IMAGE, ActionType.TARGET_CHECK, ActionType.WAIT_AND_TAP),
+            types,
+        )
+        val check = types.indexOf(ActionType.TARGET_CHECK)
+        val tap = types.indexOf(ActionType.WAIT_AND_TAP)
+        assertTrue("검사가 터치보다 앞서야 한다", check < tap)
+    }
+
+    @Test
+    fun `목표가 없으면 건너뛰고 계속 진행한다`() {
+        val applied = Macro().withPresetResultSteps(preset, now = 1L, confirmFileName = "c.png")
+        val check = applied.steps.first { it.type == ActionType.TARGET_CHECK }
+        // 목표가 없는 것이 정상이다. 여기서 매크로를 멈추면 리세가 한 바퀴도 못 돈다.
+        assertEquals(OnTimeout.SKIP, check.onTimeout)
+        assertEquals(preset.roi, check.roi)
+    }
+
+    @Test
+    fun `목표를 찾으면 반복을 멈춘다`() {
+        val applied = Macro().withPresetResultSteps(preset, now = 1L, confirmFileName = "c.png")
+        assertTrue(applied.repeat.stopOnTargetFound)
+        assertTrue("목표를 찾을 때까지 돌아야 한다", applied.repeat.isInfinite)
+        assertFalse("한 바퀴 돌았다고 멈추면 안 된다", applied.repeat.stopOnSuccess)
+    }
+
+    @Test
+    fun `확인 버튼은 좌표가 아니라 이미지로 찾는다`() {
+        val applied = Macro().withPresetResultSteps(preset, now = 1L, confirmFileName = "c.png")
+        val tap = applied.steps.first { it.type == ActionType.WAIT_AND_TAP }
+        assertTrue("템플릿으로 찾아야 한다", tap.templateIds.isNotEmpty())
+        assertEquals("고정 좌표를 쓰면 안 된다", null, tap.point)
+
+        val template = applied.templates.first { it.id == tap.templateIds.first() }
+        assertEquals("c.png", template.fileName)
+        assertEquals(preset.confirmButton.searchRegion, template.searchRegion)
+        assertEquals(preset.referenceWidth, template.referenceScreenWidth)
+    }
+
+    @Test
+    fun `확인 버튼 검색 영역이 카드 영역과 겹치지 않는다`() {
+        // 버튼을 카드 영역에서 찾으면 연출 중에 엉뚱한 것을 누를 수 있다.
+        val btn = preset.confirmButton.searchRegion
+        assertTrue("버튼 영역이 ROI 아래에 있어야 한다", btn.y >= preset.roi.bottom)
+        assertTrue(btn.bottom <= preset.referenceHeight)
+        assertTrue(btn.right <= preset.referenceWidth)
+    }
+
+    @Test
+    fun `확인 이미지를 옮기지 못하면 단계를 만들지 않는다`() {
+        // 이미지 없는 단계는 시간만 끌다 실패하는데 화면에는 정상처럼 보인다.
+        val applied = Macro().withPresetResultSteps(preset, now = 1L, confirmFileName = null)
+        assertTrue(applied.steps.isEmpty())
+        assertTrue(applied.templates.isEmpty())
+    }
+
+    @Test
+    fun `대기 시간이 무한이 아니고 연출보다 넉넉하다`() {
+        val applied = Macro().withPresetResultSteps(preset, now = 1L, confirmFileName = "c.png")
+        applied.steps.forEach {
+            assertTrue("${it.name} 이 무한 대기면 안 된다", it.timeoutMs in 1L..60_000L)
+        }
+        val wait = applied.steps.first { it.type == ActionType.WAIT_FOR_IMAGE }
+        assertTrue("뽑기 연출이 길 수 있다", wait.timeoutMs >= 30_000L)
     }
 
     @Test
