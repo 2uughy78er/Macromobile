@@ -1,0 +1,38 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Build outputs
+*.apk
+*.aab
+*.ap_
+*.dex
+output.json
+
+# 서명 키는 저장소에 올리지 않는다.
+*.jks
+*.keystore
+# 예외: debug 전용 고정 키. 이게 없으면 빌드마다 서명이 달라져
+# 덮어쓰기 설치가 막히고, 그때마다 만들어 둔 매크로가 사라진다.
+# 비밀번호는 안드로이드 표준값(android)이라 숨길 것이 없다.
+!keystore/debug.keystore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 사용자 데이터 (앱이 만드는 폴더 이름과 겹치는 실수 방지)
+/macros/
+/templates/
+/targets/
+/screenshots/
+/logs/
