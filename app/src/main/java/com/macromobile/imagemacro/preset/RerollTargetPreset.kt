@@ -8,7 +8,6 @@ import com.macromobile.imagemacro.model.Roi
 import com.macromobile.imagemacro.model.Target
 import com.macromobile.imagemacro.model.TargetMatchMode
 import com.macromobile.imagemacro.model.TargetSettings
-import com.macromobile.imagemacro.model.Template
 
 /**
  * 리세 목표카드 묶음 한 벌.
@@ -33,41 +32,9 @@ data class TargetPreset(
     val maxMatchWidthRatio: Float,
     val requiredConsecutiveMatches: Int,
     val monitorIntervalMs: Long,
+    /** 목표 판정 전에 연출이 끝나기를 기다리는 시간. */
+    val settleDelayMs: Long,
     val cards: List<PresetCard>,
-    /** 목표카드가 아닐 때 눌러 다음 리세로 넘어가는 버튼. */
-    val confirmButton: PresetButton,
-    /**
-     * 뽑기를 실행하는 자리. null 이면 뽑기 단계 없이 결과 화면만 다룬다.
-     *
-     * 목표카드는 4~5성이라 **라이브 스카우트**(최대 5성)에서만 나온다. 일반 선수
-     * 스카우트는 최대 3성이라 아무리 돌려도 나오지 않는다. 그래서 이 자리는 반드시
-     * 라이브 쪽을 가리켜야 한다.
-     */
-    val gachaSection: PresetButton?,
-    /** 단계 이미지가 들어 있는 assets 폴더. */
-    val stepAssetDir: String,
-)
-
-/**
- * 결과 화면에서 눌러야 하는 버튼.
- *
- * 좌표가 아니라 **이미지**로 찾는다. 시간이나 고정 좌표로 누르면 연출 길이가 바뀌거나
- * 해상도가 다를 때 엉뚱한 곳을 누르게 된다.
- */
-data class PresetButton(
-    val assetFile: String,
-    val displayName: String,
-    /** 버튼을 찾을 영역(기준 해상도). 화면 전체를 뒤지지 않게 좁혀둔다. */
-    val searchRegion: Roi,
-    val threshold: Float,
-    /**
-     * 매칭 중심에서 실제로 누를 지점까지의 거리(기준 해상도).
-     *
-     * 버튼만 잘라 쓰면 비슷한 버튼과 헷갈릴 때가 있다. 그럴 때는 구분이 잘 되는 넓은
-     * 영역을 템플릿으로 쓰고, 그 안에서 눌러야 할 자리를 이 값으로 가리킨다.
-     */
-    val clickOffsetX: Int = 0,
-    val clickOffsetY: Int = 0,
 )
 
 /** 묶음에 들어 있는 카드 한 장. */
@@ -81,37 +48,28 @@ data class PresetCard(
 /**
  * 컴프야 리세 목표카드.
  *
+ * ## 판정 위치
+ *
+ * 판정은 **조합 결과 화면의 상단 대형 카드** 한 자리에서만 한다. 스카우트 결과에서는
+ * 하지 않는다. 그래서 타겟 감시(`monitorEnabled`)를 켜지 않는다 — 감시를 켜면 흐름
+ * 어디서든(스카우트 결과 포함) 멈춰버려서 판정 위치를 한 곳으로 못박을 수 없다.
+ * 판정은 [withRerollFlowSteps] 가 심어두는 TARGET_CHECK 단계에서만 일어난다.
+ *
  * ## 이 숫자들이 어디서 나왔나
  *
- * 전부 사용자가 준 결과 화면 한 장과 카드 9장을 **실제로 측정해서** 나온 값이다.
- * 짐작한 값이 하나도 없다.
+ * 전부 실기기 캡처(2304×1440)를 **실제로 측정해서** 나온 값이다. 짐작한 값이 없다.
  *
- * - 화면 1536×960 에서 확대 카드는 x 664~872, y 128~452 (209×325, 비율 0.643).
- *   카드 이미지 비율(984/1536 = 0.641)과 일치한다.
- * - 작은 카드들은 y 503 부터 시작한다. 그래서 ROI 아래끝을 479 로 두어 **작은 카드가
- *   구조적으로 검사 영역 밖**이 되게 했다.
- * - 크기 제한: 확대 카드는 화면 너비의 209/1536 = 0.136, 작은 카드는 약 0.072.
- *   배율 훑기 범위(0.90~1.10)를 감안해 0.105~0.175 로 잡았다.
- * - threshold: 카드 9장끼리 교차 매칭했을 때 최대 유사도가 0.686 이었고, 배율을
- *   훑으면 자기 매칭은 1.000 이 나왔다. 그 사이를 넉넉히 잡아 0.82 로 둔다.
- *   JPEG 압축·밝기·블러는 0.98 이상이라 여유가 충분하다.
- *
- * ## 실기기 캡처로 검증했다 (2304×1440)
- *
- * 처음에는 참고 이미지 한 장으로 추정한 값이었는데, 같은 화면을 실기기에서 캡처해
- * 다시 재보니 **레이아웃이 정확히 1.5배**였고(2304/1536 = 1440/960 = 1.5) 추정값이
- * 그대로 맞았다. 실측 결과:
- *
- * - 확대 카드: 화면 좌표 x 994~1308, y 193~679 (약 314×486). 기준 해상도 환산 시
- *   x 663~872, y 129~453 — 참고 이미지에서 잰 값과 1px 안쪽으로 일치한다.
- * - 목표가 아닌 카드(이재원B)가 떠 있는 실제 화면에 9장을 매칭한 최고 점수 **0.430**.
- *   threshold 0.82 와 큰 차이가 있어 오검출 여지가 없다.
- * - 같은 화면의 카드 자리에 목표카드를 넣고 매칭하면 **0.981~0.990**, 이때 다른 카드와의
- *   최대 유사도는 0.678 이었다.
- * - 매칭된 폭은 화면 너비의 **0.1359** 로 크기 제한(0.105~0.175) 한가운데였다.
- * - 작은 카드는 기기 좌표 y 760 부터 시작하고, ROI 아래끝은 719 라 41px 여유로 벗어난다.
- *
- * 그래서 이 값들은 추정이 아니라 실기기에서 확인된 값이다.
+ * - 확대 카드: 화면 좌표 x 994~1308, y 193~679 (314×486). 카드 이미지 비율과 맞는다.
+ * - ROI (966,153,374,566) 은 그 카드를 여유 있게 감싸되, 작은 카드들이 시작되는
+ *   y 760 에는 닿지 않는다(아래끝 719, 41px 여유). 그래서 작은 카드는 **구조적으로**
+ *   검사 영역 밖이다.
+ * - 크기 제한: 확대 카드 폭은 화면 너비의 314/2304 = 0.136. 배율 훑기(0.90~1.10)를
+ *   감안해 0.105~0.175 로 잡았다.
+ * - threshold: 실기기 화면(목표 아닌 카드)에 9장을 매칭한 최고 점수가 **0.414**,
+ *   같은 자리에 목표카드를 넣으면 **1.000**, 카드끼리 교차 매칭 최대가 **0.671** 이었다.
+ *   그 사이를 넉넉히 잡아 0.82 로 둔다. JPEG 압축·밝기·블러는 0.98 이상이라 여유가 있다.
+ * - 배율은 반드시 훑어야 한다. 단일 배율로는 화면 카드가 ±3% 만 달라져도 자기 매칭이
+ *   0.62~0.75 로 떨어져 교차 매칭(0.671)과 구분이 안 된다.
  */
 object RerollTargetPreset {
 
@@ -120,17 +78,18 @@ object RerollTargetPreset {
     val COMPROSEPYA = TargetPreset(
         id = ID,
         title = "컴프야 리세 목표카드",
-        description = "뽑기 결과에서 상단 중앙에 크게 확대되는 카드만 검사합니다. " +
+        description = "조합 결과 화면에서 상단 중앙에 크게 뜨는 카드만 검사합니다. " +
             "아래에 작게 깔리는 카드들은 검사 영역 밖이라 오검출되지 않습니다.",
         assetDir = "presets/comprosepya_reroll/targets",
-        referenceWidth = 1536,
-        referenceHeight = 960,
-        roi = Roi(x = 644, y = 102, width = 249, height = 377),
+        referenceWidth = RerollFlow.REFERENCE_WIDTH,
+        referenceHeight = RerollFlow.REFERENCE_HEIGHT,
+        roi = Roi(x = 966, y = 153, width = 374, height = 566),
         threshold = 0.82f,
         minMatchWidthRatio = 0.105f,
         maxMatchWidthRatio = 0.175f,
         requiredConsecutiveMatches = 2,
         monitorIntervalMs = 150L,
+        settleDelayMs = RerollFlow.STEP_DELAY_MS,
         cards = listOf(
             PresetCard("target_01_joseonghwan.png", "조성환 76 2B 롯데"),
             PresetCard("target_02_munbogyeong.png", "문보경 76 1B LG"),
@@ -142,30 +101,6 @@ object RerollTargetPreset {
             PresetCard("target_08_gujaguk_24.png", "구자욱'24 71 LF 삼성"),
             PresetCard("target_09_leejeonghu_22.png", "이정후'22 77 CF 키움"),
         ),
-        // 실기기 캡처에서 [확인] 버튼은 (1066,1308) 크기 359x73 이었다.
-        // 기준 해상도(1536x960)로 환산하면 (711,872) 크기 239x49 다.
-        confirmButton = PresetButton(
-            assetFile = "confirm_button.png",
-            displayName = "확인",
-            // 버튼은 화면 아래쪽에만 있다. 위쪽 카드 영역을 뒤지지 않게 좁힌다.
-            searchRegion = Roi(x = 560, y = 820, width = 540, height = 140),
-            threshold = 0.88f,
-        ),
-        // 영상 70s 화면에서 잘라냈다. 버튼만 잘라 쓰면 일반 스카우트의 같은 모양
-        // 버튼이 0.883 으로 잡혀 위험했다(정답과 0.117 차이). 섹션을 통째로 쓰면
-        // 일반 섹션이 0.696 까지 떨어져 0.304 차이로 안전하게 갈린다.
-        // 스크롤 위치가 달라져도 섹션째로 찾으므로 따라간다.
-        gachaSection = PresetButton(
-            assetFile = "live_scout_section.png",
-            displayName = "라이브 스카우트 10회",
-            // 스크롤될 수 있어 세로는 넉넉히, 가로는 게임 콘텐츠 영역 안으로 좁힌다.
-            searchRegion = Roi(x = 300, y = 120, width = 936, height = 800),
-            threshold = 0.88f,
-            // 섹션 중심에서 '10회 구매하기' 버튼까지.
-            clickOffsetX = 1,
-            clickOffsetY = 115,
-        ),
-        stepAssetDir = "presets/comprosepya_reroll/steps",
     )
 
     val ALL = listOf(COMPROSEPYA)
@@ -208,11 +143,14 @@ fun Macro.withPresetTargets(
         referenceWidth = if (referenceWidth > 0) referenceWidth else preset.referenceWidth,
         referenceHeight = if (referenceHeight > 0) referenceHeight else preset.referenceHeight,
         targets = targets,
-        targetSettings = targetSettings.copy(
+        targetSettings = TargetSettings(
             mode = TargetMatchMode.ANY,
             threshold = preset.threshold,
             roi = preset.roi,
-            monitorEnabled = true,
+            settleDelayMs = preset.settleDelayMs,
+            // 감시는 끈다. 판정 위치를 "조합 결과 상단 대형 카드" 한 곳으로 묶어두기
+            // 위해서다. 감시를 켜면 스카우트 결과 화면에서도 멈출 수 있다.
+            monitorEnabled = false,
             monitorIntervalMs = preset.monitorIntervalMs,
             requiredConsecutiveMatches = preset.requiredConsecutiveMatches,
             saveScreenshotOnFound = true,
@@ -222,132 +160,85 @@ fun Macro.withPresetTargets(
 }
 
 /**
- * 결과 화면 단계를 얹는다.
+ * 리세 한 바퀴를 단계로 만든다.
  *
- * 지시서 §5 가 금지한 "몇 초 기다렸다가 좌표 클릭" 을 쓰지 않는다. 화면에 무엇이 보이는지로
- * 판단한다. §16 이 요구한 순서 — **목표 검사가 [확인] 터치보다 먼저** — 를 단계 순서로
- * 못박는다.
+ * 순서는 [RerollFlow] 그대로다.
  *
  * ```
- * WAIT_FOR_IMAGE(확인 버튼)   결과 화면에 도달했는지 확인
- *         ↓
- * TARGET_CHECK               목표카드면 여기서 멈춘다 (TargetHit → RunState.TARGET_FOUND)
- *         ↓ 목표가 아닐 때만
- * WAIT_AND_TAP(확인 버튼)    다음 리세로
+ * BEFORE_SCOUT → SCOUT → TO_COMBINE
+ *        ↓
+ * TARGET_CHECK  ← 조합 결과 상단 대형 카드. 목표면 여기서 멈춘다.
+ *        ↓ 목표가 아닐 때만
+ * AFTER_MISS → 초기화 문구 입력 → AFTER_RESET_INPUT → 다음 바퀴
  * ```
  *
- * 타겟 감시(`monitorEnabled`)도 함께 켜지므로, 단계 사이에서 카드가 떠도 잡힌다.
+ * 목표카드를 찾으면 [MacroStep] 실행이 TargetHit 으로 끝나고 엔진이 TARGET_FOUND 로
+ * 간다. 그 아래 단계(확인 누르기·계정 초기화·다음 바퀴)는 **실행되지 않는다.** 애써 뽑은
+ * 카드를 날리지 않으려면 이 순서가 반드시 지켜져야 한다.
+ *
+ * 카드 선택은 전부 **좌표**다. 조합 재료나 라인업에 어떤 선수가 나오는지는 매 리세마다
+ * 달라서 이름이나 그림으로 고를 수 없다. 선수 이름으로 갈라지는 분기는 어디에도 없다.
  */
-fun Macro.withPresetResultSteps(
-    preset: TargetPreset,
-    now: Long,
-    confirmFileName: String?,
-    /** 뽑기 섹션 이미지. null 이면 뽑기 단계 없이 결과 화면만 만든다. */
-    gachaFileName: String? = null,
-): Macro {
-    val button = preset.confirmButton
-    // 이미지를 못 옮겼으면 단계를 만들지 않는다. 이미지 없는 단계는 언제나 시간만
-    // 끌다가 실패하는데, 화면에는 정상처럼 보여서 원인을 찾기 어렵다.
-    val stored = confirmFileName ?: return this
+fun Macro.withRerollFlowSteps(preset: TargetPreset, now: Long): Macro {
+    val steps = buildList {
+        addAll(RerollFlow.BEFORE_SCOUT.map(::tapStep))
+        addAll(RerollFlow.SCOUT.map(::tapStep))
+        addAll(RerollFlow.TO_COMBINE.map(::tapStep))
 
-    val template = Template(
-        name = button.displayName,
-        fileName = stored,
-        referenceScreenWidth = preset.referenceWidth,
-        referenceScreenHeight = preset.referenceHeight,
-        searchRegion = button.searchRegion,
-        threshold = button.threshold,
-        createdAt = now,
-    )
+        // 조합 결과. 여기서만 목표를 판정한다.
+        add(targetCheckStep(preset, "목표카드 검사 (조합 결과 상단 대형 카드)"))
+        // 연출이 늦게 끝나 첫 검사가 빈 자리를 봤을 수도 있다. 한 번 더 본다.
+        // 놓치면 바로 아래에서 계정이 초기화돼 카드가 영영 사라지기 때문에,
+        // 표본을 하나 더 두는 값이 충분히 크다. 오검출 쪽 위험은 늘지 않는다 —
+        // 각 검사가 threshold 와 연속 판정을 똑같이 거친다.
+        add(targetCheckStep(preset, "목표카드 재검사 (연출이 늦을 때)"))
 
-    val gacha = preset.gachaSection
-    val gachaTemplate = if (gacha != null && gachaFileName != null) {
-        Template(
-            name = gacha.displayName,
-            fileName = gachaFileName,
-            referenceScreenWidth = preset.referenceWidth,
-            referenceScreenHeight = preset.referenceHeight,
-            searchRegion = gacha.searchRegion,
-            threshold = gacha.threshold,
-            clickOffsetX = gacha.clickOffsetX,
-            clickOffsetY = gacha.clickOffsetY,
-            createdAt = now,
+        addAll(RerollFlow.AFTER_MISS.map(::tapStep))
+        add(tapStep(RerollFlow.RESET_INPUT_FIELD))
+        add(
+            MacroStep(
+                type = ActionType.TEXT_INPUT,
+                name = "초기화 확인 문구 입력",
+                text = RerollFlow.RESET_CONFIRM_TEXT,
+                clearBeforeInput = true,
+                afterDelayMs = RerollFlow.STEP_DELAY_MS,
+                // 문구가 안 들어가면 초기화가 안 되고, 그 뒤 좌표 터치는 전부 엉뚱한
+                // 곳을 누른다. 그냥 넘기지 말고 한 바퀴를 처음부터 다시 돈다.
+                onTimeout = OnTimeout.RESTART,
+            ),
         )
-    } else {
-        null
+        addAll(RerollFlow.AFTER_RESET_INPUT.map(::tapStep))
     }
 
-    // 뽑기 단계는 이미지가 있을 때만 만든다. 없으면 결과 화면만 다룬다.
-    val gachaSteps = gachaTemplate?.let { tpl ->
-        listOf(
-            MacroStep(
-                type = ActionType.WAIT_FOR_IMAGE,
-                name = "스카우트 화면 확인",
-                templateIds = listOf(tpl.id),
-                timeoutMs = 20_000L,
-                pollIntervalMs = 300L,
-                afterDelayMs = 300L,
-                onTimeout = OnTimeout.RESTART,
-            ),
-            MacroStep(
-                type = ActionType.WAIT_AND_TAP,
-                name = "라이브 스카우트 10회 뽑기",
-                templateIds = listOf(tpl.id),
-                timeoutMs = 15_000L,
-                pollIntervalMs = 300L,
-                // 뽑기 연출이 시작될 시간을 준다.
-                afterDelayMs = 1_500L,
-                onTimeout = OnTimeout.RESTART,
-            ),
-        )
-    } ?: emptyList()
-
-    val resultSteps = listOf(
-        MacroStep(
-            type = ActionType.WAIT_FOR_IMAGE,
-            name = "결과 화면 기다리기",
-            templateIds = listOf(template.id),
-            // 영상에서 뽑기 진입(95s)부터 결과 화면(115s)까지 20초가 걸렸다.
-            // 로딩이 겹칠 수 있으니 넉넉히 두되 무한 대기는 하지 않는다.
-            timeoutMs = 60_000L,
-            pollIntervalMs = 200L,
-            afterDelayMs = 0L,
-            onTimeout = OnTimeout.RESTART,
-        ),
-        MacroStep(
-            type = ActionType.TARGET_CHECK,
-            name = "목표카드 검사 (확대 카드만)",
-            roi = preset.roi,
-            threshold = preset.threshold,
-            // 연출 중간 프레임을 거르되 빨리 멈춰야 한다. 카드가 자리를 잡는 데
-            // 걸리는 시간만 본다.
-            timeoutMs = 4_000L,
-            pollIntervalMs = preset.monitorIntervalMs,
-            afterDelayMs = 0L,
-            // 목표가 없으면 그냥 다음 단계로. 이게 정상 흐름이다.
-            onTimeout = OnTimeout.SKIP,
-        ),
-        MacroStep(
-            type = ActionType.WAIT_AND_TAP,
-            name = "확인 눌러 다음 리세로",
-            templateIds = listOf(template.id),
-            timeoutMs = 15_000L,
-            pollIntervalMs = 200L,
-            afterDelayMs = 800L,
-            onTimeout = OnTimeout.RESTART,
-        ),
-    )
-
-    val keepNames = setOfNotNull(button.displayName, gacha?.displayName)
     return copy(
-        templates = templates.filterNot { it.name in keepNames } +
-            listOfNotNull(template, gachaTemplate),
-        steps = gachaSteps + resultSteps,
+        referenceWidth = preset.referenceWidth,
+        referenceHeight = preset.referenceHeight,
+        // 단계가 전부 좌표 터치라 템플릿 이미지를 쓰지 않는다.
+        templates = emptyList(),
+        steps = steps,
         repeat = repeat.copy(
             count = -1,              // 목표를 찾을 때까지 계속 돈다
             stopOnTargetFound = true,
             stopOnSuccess = false,
+            cycleDelayMs = RerollFlow.STEP_DELAY_MS,
         ),
         updatedAt = now,
     )
 }
+
+private fun tapStep(tap: RerollTap): MacroStep = MacroStep(
+    type = ActionType.TAP,
+    name = tap.name,
+    point = tap.point(),
+    afterDelayMs = RerollFlow.STEP_DELAY_MS,
+)
+
+private fun targetCheckStep(preset: TargetPreset, name: String): MacroStep = MacroStep(
+    type = ActionType.TARGET_CHECK,
+    name = name,
+    roi = preset.roi,
+    threshold = preset.threshold,
+    afterDelayMs = 0L,
+    // 목표가 없는 게 정상이다. 그냥 다음 단계로 간다.
+    onTargetMissing = OnTimeout.SKIP,
+)

@@ -17,7 +17,7 @@ class PresetImporter(
     private val files: TemplateFiles,
 ) {
     /**
-     * [preset] 의 카드들을 [macro] 의 타겟으로 만든다.
+     * [preset] 의 카드들을 [macro] 의 타겟으로 만들고, 리세 한 바퀴를 단계로 채운다.
      *
      * 이미지 복사에 실패한 카드는 조용히 빠지지 않고 로그에 남는다. 이미지 없는 타겟을
      * 만들어 두면 매칭이 언제나 실패하는데 이유가 보이지 않기 때문이다.
@@ -25,36 +25,18 @@ class PresetImporter(
     fun apply(macro: Macro, preset: TargetPreset, now: Long = System.currentTimeMillis()): Macro {
         val failed = ArrayList<String>()
         val withTargets = macro.withPresetTargets(preset, now) { card ->
-            copy(macro.id, "${preset.assetDir}/${card.assetFile}", card.assetFile, asTarget = true)
+            copy(macro.id, "${preset.assetDir}/${card.assetFile}", card.assetFile)
                 .also { saved -> if (saved == null) failed += card.assetFile }
         }
-        val button = preset.confirmButton
-        val confirmFile = copy(
-            macro.id,
-            "${preset.stepAssetDir}/${button.assetFile}",
-            button.assetFile,
-            asTarget = false,
-        )
-        if (confirmFile == null) failed += button.assetFile
-        val gachaFile = preset.gachaSection?.let { g ->
-            copy(macro.id, "${preset.stepAssetDir}/${g.assetFile}", g.assetFile, asTarget = false)
-                .also { if (it == null) failed += g.assetFile }
-        }
         if (failed.isNotEmpty()) {
-            Log.e(TAG, "이미지 ${failed.size}개를 옮기지 못했습니다: ${failed.joinToString()}")
+            Log.e(TAG, "카드 이미지 ${failed.size}개를 옮기지 못했습니다: ${failed.joinToString()}")
         }
-        return withTargets.withPresetResultSteps(preset, now, confirmFile, gachaFile)
+        return withTargets.withRerollFlowSteps(preset, now)
     }
 
     /** 실패하면 null. 부른 쪽이 그 항목을 빼고 기록한다. */
-    private fun copy(
-        macroId: String,
-        assetPath: String,
-        fileName: String,
-        asTarget: Boolean,
-    ): String? = try {
-        val dir = if (asTarget) files.targetsDir(macroId) else files.templatesDir(macroId)
-        val dest = File(dir, fileName)
+    private fun copy(macroId: String, assetPath: String, fileName: String): String? = try {
+        val dest = File(files.targetsDir(macroId), fileName)
         context.assets.open(assetPath).use { input ->
             dest.outputStream().use { output -> input.copyTo(output) }
         }

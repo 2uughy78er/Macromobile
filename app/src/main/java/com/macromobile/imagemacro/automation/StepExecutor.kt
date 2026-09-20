@@ -333,6 +333,13 @@ class StepExecutor(
         return applyPolicy(step.onTimeout, label, "'$label' 단계에서 글자를 읽지 못했습니다.$hint")
     }
 
+    /**
+     * 타겟이 화면에 있는지 판정한다.
+     *
+     * `requiredConsecutiveMatches` 가 2 이상이면 **연속으로 그만큼** 잡혀야 성공으로
+     * 본다. 연출 중간 프레임이 우연히 한 번 맞는 경우를 걸러내기 위해서다.
+     * (1 이면 한 번만 보고 판단한다 — 이제까지와 같다.)
+     */
     private suspend fun doTargetCheck(
         ctx: ExecutionContext,
         step: MacroStep,
@@ -344,32 +351,47 @@ class StepExecutor(
                 "등록된 타겟 이미지가 없습니다. 매크로 편집에서 타겟 카드를 먼저 등록해주세요.",
             )
         }
-        // 결과 화면 애니메이션이 끝나기를 기다린다.
-        ctx.sleep(settings.settleDelayMs)
-        ctx.gate()
+        val required = settings.requiredConsecutiveMatches.coerceAtLeast(1)
+        var lastFrame: ScreenFrame? = null
+        var lastResult: GroupMatchResult? = null
 
-        val (frame, error) = captureOnce()
-        if (frame == null) return StepOutcome.Abort("'$label' 단계: ${error ?: "화면을 가져오지 못했습니다."}")
-        val result = detector.checkTargets(
-            frame = frame,
-            macro = ctx.macro,
-            settings = settings,
-            targetIds = step.targetIds,
-            modeOverride = step.targetMatchMode,
-            minCountOverride = step.targetMinCount,
-            analysisScale = ctx.analysisScale,
-        )
-        result.matches.forEach {
-            ctx.log(
-                "  판정 [${it.templateName.ifBlank { "이름 없음" }}] " +
-                    "${format(it.match.score)} ${if (it.match.found) "일치" else "아님"}",
+        for (attempt in 0 until required) {
+            // 첫 검사 전에는 결과 화면 애니메이션이 끝나기를 기다린다.
+            // 재확인 사이에는 화면이 한 프레임 넘어갈 만큼만 쉰다.
+            ctx.sleep(if (attempt == 0) settings.settleDelayMs else CONSECUTIVE_RECHECK_MS)
+            ctx.gate()
+
+            val (frame, error) = captureOnce()
+            if (frame == null) {
+                return StepOutcome.Abort("'$label' 단계: ${error ?: "화면을 가져오지 못했습니다."}")
+            }
+            val result = detector.checkTargets(
+                frame = frame,
+                macro = ctx.macro,
+                settings = settings,
+                targetIds = step.targetIds,
+                modeOverride = step.targetMatchMode,
+                minCountOverride = step.targetMinCount,
+                analysisScale = ctx.analysisScale,
             )
+            val prefix = if (required > 1) "  판정 ${attempt + 1}/$required" else "  판정"
+            result.matches.forEach {
+                ctx.log(
+                    "$prefix [${it.templateName.ifBlank { "이름 없음" }}] " +
+                        "${format(it.match.score)} ${if (it.match.found) "일치" else "아님"}",
+                )
+            }
+
+            if (!result.success) {
+                saveDebugShot(ctx, "target_miss")
+                return applyPolicy(step.onTargetMissing, label, "타겟을 찾지 못했습니다.")
+            }
+            lastFrame = frame
+            lastResult = result
         }
 
-        if (!result.success) {
-            saveDebugShot(ctx, "target_miss")
-            return applyPolicy(step.onTargetMissing, label, "타겟을 찾지 못했습니다.")
-        }
+        val frame = lastFrame ?: return StepOutcome.Abort("'$label' 단계: 화면을 가져오지 못했습니다.")
+        val result = lastResult ?: return StepOutcome.Abort("'$label' 단계: 판정 결과가 없습니다.")
         return StepOutcome.TargetHit(buildTargetInfo(ctx, frame, result))
     }
 
@@ -584,5 +606,8 @@ class StepExecutor(
         /** 단발 캡처가 일시적으로 실패했을 때의 재시도 횟수와 간격. */
         const val SINGLE_CAPTURE_ATTEMPTS = 6
         const val SINGLE_CAPTURE_RETRY_MS = 150L
+
+        /** 타겟 연속 판정 사이의 간격. 화면이 한 프레임 넘어갈 만큼만 쉰다. */
+        const val CONSECUTIVE_RECHECK_MS = 250L
     }
 }

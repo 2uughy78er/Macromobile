@@ -349,7 +349,9 @@ fun TargetEditorScreen(
             title = { Text("${preset.title} 가져오기") },
             text = {
                 Text(
-                    "목표카드 ${preset.cards.size}장과 결과 화면 단계를 등록합니다.\n\n" +
+                    "목표카드 ${preset.cards.size}장과 리세 한 바퀴 단계를 등록합니다.\n\n" +
+                        "좌표는 ${preset.referenceWidth}×${preset.referenceHeight} 기준이고, " +
+                        "다른 해상도에서는 비율로 옮겨집니다.\n\n" +
                         "이 매크로에 이미 있는 타겟과 단계는 대체됩니다. 계속할까요?",
                 )
             },
