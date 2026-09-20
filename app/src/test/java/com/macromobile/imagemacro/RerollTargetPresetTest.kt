@@ -331,14 +331,14 @@ class RerollTargetPresetTest {
 
     @Test
     fun `I 단계 순서가 흐름 정의와 같다`() {
-        val expected = buildList {
+        val expected = buildList<String> {
             addAll(RerollFlow.BEFORE_SCOUT.map { it.name })
             addAll(RerollFlow.SCOUT.map { it.name })
             addAll(RerollFlow.TO_COMBINE.map { it.name })
         }
         assertEquals(expected, steps.take(expected.size).map { it.name })
 
-        val tail = buildList {
+        val tail = buildList<String> {
             addAll(RerollFlow.AFTER_MISS.map { it.name })
             add(RerollFlow.RESET_INPUT_FIELD.name)
             add("초기화 확인 문구 입력")

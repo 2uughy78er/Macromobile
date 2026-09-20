@@ -7,7 +7,6 @@ import com.macromobile.imagemacro.model.OnTimeout
 import com.macromobile.imagemacro.model.Roi
 import com.macromobile.imagemacro.model.Target
 import com.macromobile.imagemacro.model.TargetMatchMode
-import com.macromobile.imagemacro.model.TargetSettings
 
 /**
  * 리세 목표카드 묶음 한 벌.
@@ -143,7 +142,7 @@ fun Macro.withPresetTargets(
         referenceWidth = if (referenceWidth > 0) referenceWidth else preset.referenceWidth,
         referenceHeight = if (referenceHeight > 0) referenceHeight else preset.referenceHeight,
         targets = targets,
-        targetSettings = TargetSettings(
+        targetSettings = targetSettings.copy(
             mode = TargetMatchMode.ANY,
             threshold = preset.threshold,
             roi = preset.roi,
@@ -180,7 +179,7 @@ fun Macro.withPresetTargets(
  * 달라서 이름이나 그림으로 고를 수 없다. 선수 이름으로 갈라지는 분기는 어디에도 없다.
  */
 fun Macro.withRerollFlowSteps(preset: TargetPreset, now: Long): Macro {
-    val steps = buildList {
+    val steps = buildList<MacroStep> {
         addAll(RerollFlow.BEFORE_SCOUT.map(::tapStep))
         addAll(RerollFlow.SCOUT.map(::tapStep))
         addAll(RerollFlow.TO_COMBINE.map(::tapStep))
