@@ -32,6 +32,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # 기본값은 'tools platform-tools' 인데, 레거시 'tools' 패키지는 SDK 저장소에서
+          # 삭제되어 sdkmanager 가 "Failed to find package 'tools'" 로 죽는다.
+          # 우리가 실제로 필요한 것은 platform-tools 뿐이다.
+          packages: 'platform-tools'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
