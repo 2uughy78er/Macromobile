@@ -180,6 +180,10 @@ class TargetDetector(
             threshold = threshold,
             searchRect = mapper.toScreenRect(roi),
             analysisScale = analysisScale,
+            // 타겟은 배율을 훑어서 찾는다. 카드 연출처럼 화면상 크기가 몇 % 흔들리는
+            // 대상은 단일 배율로는 놓친다(TemplateMatcher.CARD_SCALE_SWEEP 설명 참조).
+            // 단계 템플릿(버튼 등)은 크기가 고정이라 기존 동작을 그대로 둔다.
+            scaleSweep = TemplateMatcher.CARD_SCALE_SWEEP,
         )
         return applySizeGuard(raw, target, frame)
     }

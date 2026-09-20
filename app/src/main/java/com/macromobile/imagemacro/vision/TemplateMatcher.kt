@@ -43,19 +43,25 @@ class TemplateMatcher(private val cache: TemplateCache) {
         threshold: Float,
         searchRect: ScreenRect? = null,
         analysisScale: Float = 1f,
+        scaleSweep: List<Float> = SINGLE_SCALE,
     ): MatchResult {
-        val prepared = prepare(
-            frame, templateFile, templateRefWidth, templateRefHeight, searchRect, analysisScale,
-        ) ?: return MatchResult.NONE
-
-        return try {
-            val result = matchRaw(prepared) ?: return MatchResult.NONE
-            val mm = Core.minMaxLoc(result)
-            result.release()
-            prepared.toMatch(mm.maxVal.toFloat(), mm.maxLoc, threshold)
-        } finally {
-            prepared.releaseArea()
+        var best = MatchResult.NONE
+        for (mult in scaleSweep) {
+            val prepared = prepare(
+                frame, templateFile, templateRefWidth, templateRefHeight,
+                searchRect, analysisScale, mult,
+            ) ?: continue
+            val candidate = try {
+                val result = matchRaw(prepared) ?: continue
+                val mm = Core.minMaxLoc(result)
+                result.release()
+                prepared.toMatch(mm.maxVal.toFloat(), mm.maxLoc, threshold)
+            } finally {
+                prepared.releaseArea()
+            }
+            if (candidate.score > best.score) best = candidate
         }
+        return best
     }
 
     /**
@@ -141,6 +147,7 @@ class TemplateMatcher(private val cache: TemplateCache) {
         templateRefHeight: Int,
         searchRect: ScreenRect?,
         analysisScale: Float,
+        templateScale: Float = 1f,
     ): Prepared? {
         if (!templateFile.exists()) {
             Log.w(TAG, "템플릿 파일이 없습니다: ${templateFile.name}")
@@ -150,7 +157,7 @@ class TemplateMatcher(private val cache: TemplateCache) {
 
         // 템플릿 배율 = (캡처 당시 해상도 → 현재 화면) 보정 × 분석 축소 배율
         val fit = fitScale(templateRefWidth, templateRefHeight, frame.width, frame.height)
-        val template = cache.scaled(templateFile, fit * scaleClamped) ?: return null
+        val template = cache.scaled(templateFile, fit * scaleClamped * templateScale) ?: return null
         if (template.width < 2 || template.height < 2) return null
 
         val screen = frame.rgbScaled(scaleClamped)
@@ -231,6 +238,22 @@ class TemplateMatcher(private val cache: TemplateCache) {
     companion object {
         private const val TAG = "TemplateMatcher"
         const val MIN_ANALYSIS_SCALE = 0.25f
+
+        /** 배율을 훑지 않는다. 기존 호출부는 모두 이 동작을 그대로 유지한다. */
+        val SINGLE_SCALE: List<Float> = listOf(1f)
+
+        /**
+         * 기준 배율 둘레를 훑는다.
+         *
+         * `referenceScreenWidth/Height` 로 해상도는 보정되지만, 반올림·레터박스·연출
+         * 확대 때문에 화면상 크기가 몇 %씩 어긋난다. 제공된 카드 9장으로 실측한 결과
+         * **3% 만 어긋나도** TM_CCOEFF_NORMED 점수가 1.00 → 0.62 로 떨어져, 다른 카드와의
+         * 최대 유사도(0.68)보다 낮아졌다. 즉 단일 배율로는 안전한 threshold 가 아예
+         * 존재하지 않았다. 이 범위를 훑으면 같은 조건에서 자기 매칭이 1.00 으로 회복되고
+         * 교차 매칭은 0.69 로 거의 그대로였다(분리 폭 0.31).
+         */
+        val CARD_SCALE_SWEEP: List<Float> =
+            listOf(0.90f, 0.94f, 0.97f, 1.00f, 1.03f, 1.06f, 1.10f)
 
         /**
          * 템플릿을 캡처한 해상도 대비 현재 화면의 배율.
