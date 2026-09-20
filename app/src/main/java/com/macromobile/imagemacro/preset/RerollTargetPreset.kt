@@ -36,6 +36,14 @@ data class TargetPreset(
     val cards: List<PresetCard>,
     /** 목표카드가 아닐 때 눌러 다음 리세로 넘어가는 버튼. */
     val confirmButton: PresetButton,
+    /**
+     * 뽑기를 실행하는 자리. null 이면 뽑기 단계 없이 결과 화면만 다룬다.
+     *
+     * 목표카드는 4~5성이라 **라이브 스카우트**(최대 5성)에서만 나온다. 일반 선수
+     * 스카우트는 최대 3성이라 아무리 돌려도 나오지 않는다. 그래서 이 자리는 반드시
+     * 라이브 쪽을 가리켜야 한다.
+     */
+    val gachaSection: PresetButton?,
     /** 단계 이미지가 들어 있는 assets 폴더. */
     val stepAssetDir: String,
 )
@@ -52,6 +60,14 @@ data class PresetButton(
     /** 버튼을 찾을 영역(기준 해상도). 화면 전체를 뒤지지 않게 좁혀둔다. */
     val searchRegion: Roi,
     val threshold: Float,
+    /**
+     * 매칭 중심에서 실제로 누를 지점까지의 거리(기준 해상도).
+     *
+     * 버튼만 잘라 쓰면 비슷한 버튼과 헷갈릴 때가 있다. 그럴 때는 구분이 잘 되는 넓은
+     * 영역을 템플릿으로 쓰고, 그 안에서 눌러야 할 자리를 이 값으로 가리킨다.
+     */
+    val clickOffsetX: Int = 0,
+    val clickOffsetY: Int = 0,
 )
 
 /** 묶음에 들어 있는 카드 한 장. */
@@ -135,6 +151,20 @@ object RerollTargetPreset {
             searchRegion = Roi(x = 560, y = 820, width = 540, height = 140),
             threshold = 0.88f,
         ),
+        // 영상 70s 화면에서 잘라냈다. 버튼만 잘라 쓰면 일반 스카우트의 같은 모양
+        // 버튼이 0.883 으로 잡혀 위험했다(정답과 0.117 차이). 섹션을 통째로 쓰면
+        // 일반 섹션이 0.696 까지 떨어져 0.304 차이로 안전하게 갈린다.
+        // 스크롤 위치가 달라져도 섹션째로 찾으므로 따라간다.
+        gachaSection = PresetButton(
+            assetFile = "live_scout_section.png",
+            displayName = "라이브 스카우트 10회",
+            // 스크롤될 수 있어 세로는 넉넉히, 가로는 게임 콘텐츠 영역 안으로 좁힌다.
+            searchRegion = Roi(x = 300, y = 120, width = 936, height = 800),
+            threshold = 0.88f,
+            // 섹션 중심에서 '10회 구매하기' 버튼까지.
+            clickOffsetX = 1,
+            clickOffsetY = 115,
+        ),
         stepAssetDir = "presets/comprosepya_reroll/steps",
     )
 
@@ -212,6 +242,8 @@ fun Macro.withPresetResultSteps(
     preset: TargetPreset,
     now: Long,
     confirmFileName: String?,
+    /** 뽑기 섹션 이미지. null 이면 뽑기 단계 없이 결과 화면만 만든다. */
+    gachaFileName: String? = null,
 ): Macro {
     val button = preset.confirmButton
     // 이미지를 못 옮겼으면 단계를 만들지 않는다. 이미지 없는 단계는 언제나 시간만
@@ -228,13 +260,56 @@ fun Macro.withPresetResultSteps(
         createdAt = now,
     )
 
-    val steps = listOf(
+    val gacha = preset.gachaSection
+    val gachaTemplate = if (gacha != null && gachaFileName != null) {
+        Template(
+            name = gacha.displayName,
+            fileName = gachaFileName,
+            referenceScreenWidth = preset.referenceWidth,
+            referenceScreenHeight = preset.referenceHeight,
+            searchRegion = gacha.searchRegion,
+            threshold = gacha.threshold,
+            clickOffsetX = gacha.clickOffsetX,
+            clickOffsetY = gacha.clickOffsetY,
+            createdAt = now,
+        )
+    } else {
+        null
+    }
+
+    // 뽑기 단계는 이미지가 있을 때만 만든다. 없으면 결과 화면만 다룬다.
+    val gachaSteps = gachaTemplate?.let { tpl ->
+        listOf(
+            MacroStep(
+                type = ActionType.WAIT_FOR_IMAGE,
+                name = "스카우트 화면 확인",
+                templateIds = listOf(tpl.id),
+                timeoutMs = 20_000L,
+                pollIntervalMs = 300L,
+                afterDelayMs = 300L,
+                onTimeout = OnTimeout.RESTART,
+            ),
+            MacroStep(
+                type = ActionType.WAIT_AND_TAP,
+                name = "라이브 스카우트 10회 뽑기",
+                templateIds = listOf(tpl.id),
+                timeoutMs = 15_000L,
+                pollIntervalMs = 300L,
+                // 뽑기 연출이 시작될 시간을 준다.
+                afterDelayMs = 1_500L,
+                onTimeout = OnTimeout.RESTART,
+            ),
+        )
+    } ?: emptyList()
+
+    val resultSteps = listOf(
         MacroStep(
             type = ActionType.WAIT_FOR_IMAGE,
             name = "결과 화면 기다리기",
             templateIds = listOf(template.id),
-            // 뽑기 연출이 길 수 있다. 버튼이 뜰 때까지는 넉넉히 기다린다.
-            timeoutMs = 40_000L,
+            // 영상에서 뽑기 진입(95s)부터 결과 화면(115s)까지 20초가 걸렸다.
+            // 로딩이 겹칠 수 있으니 넉넉히 두되 무한 대기는 하지 않는다.
+            timeoutMs = 60_000L,
             pollIntervalMs = 200L,
             afterDelayMs = 0L,
             onTimeout = OnTimeout.RESTART,
@@ -263,9 +338,11 @@ fun Macro.withPresetResultSteps(
         ),
     )
 
+    val keepNames = setOfNotNull(button.displayName, gacha?.displayName)
     return copy(
-        templates = templates.filterNot { it.name == button.displayName } + template,
-        steps = steps,
+        templates = templates.filterNot { it.name in keepNames } +
+            listOfNotNull(template, gachaTemplate),
+        steps = gachaSteps + resultSteps,
         repeat = repeat.copy(
             count = -1,              // 목표를 찾을 때까지 계속 돈다
             stopOnTargetFound = true,

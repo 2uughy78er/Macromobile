@@ -36,10 +36,14 @@ class PresetImporter(
             asTarget = false,
         )
         if (confirmFile == null) failed += button.assetFile
+        val gachaFile = preset.gachaSection?.let { g ->
+            copy(macro.id, "${preset.stepAssetDir}/${g.assetFile}", g.assetFile, asTarget = false)
+                .also { if (it == null) failed += g.assetFile }
+        }
         if (failed.isNotEmpty()) {
             Log.e(TAG, "이미지 ${failed.size}개를 옮기지 못했습니다: ${failed.joinToString()}")
         }
-        return withTargets.withPresetResultSteps(preset, now, confirmFile)
+        return withTargets.withPresetResultSteps(preset, now, confirmFile, gachaFile)
     }
 
     /** 실패하면 null. 부른 쪽이 그 항목을 빼고 기록한다. */

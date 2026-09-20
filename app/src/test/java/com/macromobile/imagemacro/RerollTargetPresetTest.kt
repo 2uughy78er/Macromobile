@@ -132,6 +132,74 @@ class RerollTargetPresetTest {
         assertEquals("뽑기 버튼", applied.steps.first().name)
     }
 
+    // ------------------------------------------------------------------
+    // 뽑기 루프
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `뽑기 이미지가 있으면 스카우트 단계가 앞에 붙는다`() {
+        val applied = Macro().withPresetResultSteps(
+            preset, now = 1L, confirmFileName = "c.png", gachaFileName = "g.png",
+        )
+        assertEquals(
+            listOf(
+                ActionType.WAIT_FOR_IMAGE,   // 스카우트 화면 확인
+                ActionType.WAIT_AND_TAP,     // 라이브 10회 뽑기
+                ActionType.WAIT_FOR_IMAGE,   // 결과 화면 대기
+                ActionType.TARGET_CHECK,     // 목표 검사
+                ActionType.WAIT_AND_TAP,     // 확인
+            ),
+            applied.steps.map { it.type },
+        )
+        // 검사는 여전히 확인 터치보다 앞이다.
+        val check = applied.steps.indexOfFirst { it.type == ActionType.TARGET_CHECK }
+        val lastTap = applied.steps.indexOfLast { it.type == ActionType.WAIT_AND_TAP }
+        assertTrue(check < lastTap)
+    }
+
+    @Test
+    fun `뽑기 이미지가 없으면 결과 화면만 만든다`() {
+        val applied = Macro().withPresetResultSteps(preset, now = 1L, confirmFileName = "c.png")
+        assertEquals(3, applied.steps.size)
+        assertEquals(1, applied.templates.size)
+    }
+
+    @Test
+    fun `뽑기는 섹션 템플릿과 클릭 보정으로 누른다`() {
+        // 버튼만 잘라 쓰면 일반 스카우트의 같은 버튼이 0.883 으로 잡혀 위험했다.
+        val gacha = preset.gachaSection!!
+        assertTrue("섹션을 통째로 써야 구분된다", gacha.clickOffsetY != 0)
+        assertTrue(gacha.threshold >= 0.85f)
+
+        val applied = Macro().withPresetResultSteps(
+            preset, now = 1L, confirmFileName = "c.png", gachaFileName = "g.png",
+        )
+        val tpl = applied.templates.first { it.fileName == "g.png" }
+        assertEquals(gacha.clickOffsetX, tpl.clickOffsetX)
+        assertEquals(gacha.clickOffsetY, tpl.clickOffsetY)
+        assertEquals(gacha.searchRegion, tpl.searchRegion)
+    }
+
+    @Test
+    fun `뽑기 단계도 무한 대기하지 않는다`() {
+        val applied = Macro().withPresetResultSteps(
+            preset, now = 1L, confirmFileName = "c.png", gachaFileName = "g.png",
+        )
+        applied.steps.forEach {
+            assertTrue("${it.name} 무한 대기 금지", it.timeoutMs in 1L..60_000L)
+        }
+        // 뽑기 연출이 20초가량 걸린다. 결과 대기는 그보다 충분히 길어야 한다.
+        val waitResult = applied.steps.first { it.name.contains("결과 화면") }
+        assertTrue(waitResult.timeoutMs >= 40_000L)
+    }
+
+    @Test
+    fun `뽑기 검색 영역이 게임 콘텐츠 안에 있다`() {
+        val r = preset.gachaSection!!.searchRegion
+        assertTrue(r.x >= 0 && r.right <= preset.referenceWidth)
+        assertTrue(r.y >= 0 && r.bottom <= preset.referenceHeight)
+    }
+
     @Test
     fun `id 로 찾을 수 있다`() {
         assertNotNull(RerollTargetPreset.byId(RerollTargetPreset.ID))
