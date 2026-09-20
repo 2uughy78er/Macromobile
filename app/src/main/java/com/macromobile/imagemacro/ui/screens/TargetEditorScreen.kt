@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.macromobile.imagemacro.model.Target
 import com.macromobile.imagemacro.model.TargetMatchMode
+import com.macromobile.imagemacro.preset.RerollTargetPreset
+import com.macromobile.imagemacro.preset.TargetPreset
 import com.macromobile.imagemacro.ui.MacroViewModel
 import com.macromobile.imagemacro.ui.components.FileImage
 
@@ -55,6 +58,8 @@ fun TargetEditorScreen(
     val macros by viewModel.macros.collectAsStateWithLifecycle()
     val macro = remember(macros, macroId) { macros.firstOrNull { it.id == macroId } }
     var pendingDelete by remember { mutableStateOf<Target?>(null) }
+    // 가져오기는 기존 타겟과 단계를 갈아끼우므로 반드시 한 번 묻는다.
+    var pendingPreset by remember { mutableStateOf<TargetPreset?>(null) }
 
     Scaffold(
         topBar = {
@@ -81,6 +86,35 @@ fun TargetEditorScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            SectionCard(
+                title = "목표카드 묶음 가져오기",
+                subtitle = "앱에 들어 있는 카드 묶음을 한 번에 등록합니다. " +
+                    "가져온 뒤에는 평범한 타겟이라 편집·삭제가 됩니다.",
+            ) {
+                RerollTargetPreset.ALL.forEach { preset ->
+                    Text(preset.title, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        preset.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "목표카드 ${preset.cards.size}장 · 기준 해상도 " +
+                            "${preset.referenceWidth}×${preset.referenceHeight} · " +
+                            "유사도 ${preset.threshold}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { pendingPreset = preset },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("가져오기")
+                    }
+                }
+            }
+
             SectionCard(
                 title = "등록한 타겟 (${macro.targets.size})",
                 subtitle = "화면 캡처나 갤러리에서 원하는 카드를 잘라 등록하세요.",
@@ -305,6 +339,28 @@ fun TargetEditorScreen(
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) { Text("취소") }
+            },
+        )
+    }
+
+    pendingPreset?.let { preset ->
+        AlertDialog(
+            onDismissRequest = { pendingPreset = null },
+            title = { Text("${preset.title} 가져오기") },
+            text = {
+                Text(
+                    "목표카드 ${preset.cards.size}장과 결과 화면 단계를 등록합니다.\n\n" +
+                        "이 매크로에 이미 있는 타겟과 단계는 대체됩니다. 계속할까요?",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    macro?.let { viewModel.importPreset(it, preset) }
+                    pendingPreset = null
+                }) { Text("가져오기") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingPreset = null }) { Text("취소") }
             },
         )
     }

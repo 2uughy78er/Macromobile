@@ -6,6 +6,7 @@ import com.macromobile.imagemacro.input.KeyEventController
 import com.macromobile.imagemacro.input.TextInputController
 import com.macromobile.imagemacro.ocr.MlKitOcrEngine
 import com.macromobile.imagemacro.ocr.OcrEngine
+import com.macromobile.imagemacro.preset.PresetImporter
 import com.macromobile.imagemacro.storage.MacroBackup
 import com.macromobile.imagemacro.storage.MacroRepository
 import com.macromobile.imagemacro.storage.SettingsRepository
@@ -28,6 +29,9 @@ class AppContainer(context: Context) {
     val macroRepository = MacroRepository(files)
     val settingsRepository = SettingsRepository(appContext)
     val macroBackup = MacroBackup(files, macroRepository)
+
+    /** 앱에 들어 있는 목표카드 묶음을 사용자 타겟으로 옮긴다. */
+    val presetImporter = PresetImporter(appContext, files)
 
     val templateCache = TemplateCache()
     val templateMatcher = TemplateMatcher(templateCache)

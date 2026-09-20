@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.macromobile.imagemacro.MacroApp
 import com.macromobile.imagemacro.automation.MacroStatus
 import com.macromobile.imagemacro.model.Macro
+import com.macromobile.imagemacro.preset.TargetPreset
 import com.macromobile.imagemacro.model.MacroStep
 import com.macromobile.imagemacro.model.Target
 import com.macromobile.imagemacro.model.Template
@@ -146,6 +147,36 @@ class MacroViewModel(app: Application) : AndroidViewModel(app) {
             val saved = container.macroRepository.save(macro)
             container.invalidateImageCache()
             onSaved(saved)
+        }
+    }
+
+    /**
+     * 앱에 들어 있는 목표카드 묶음을 이 매크로에 가져온다.
+     *
+     * 가져온 뒤로는 평범한 사용자 타겟이라 편집·삭제가 모두 된다. 이미지를 옮기지 못한
+     * 항목은 조용히 빠지지 않고 개수를 알려준다 — 이미지 없는 타겟은 언제나 매칭에
+     * 실패하면서 화면에는 정상처럼 보이기 때문이다.
+     */
+    fun importPreset(
+        macro: Macro,
+        preset: TargetPreset,
+        onDone: (Macro) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            val applied = container.presetImporter.apply(macro, preset)
+            val saved = container.macroRepository.save(applied)
+            container.invalidateImageCache()
+            val missing = preset.cards.size - saved.targets.size
+            showMessage(
+                if (missing > 0) {
+                    "'${preset.title}' 을(를) 가져왔습니다. " +
+                        "목표카드 ${saved.targets.size}장 등록, ${missing}장은 실패했습니다."
+                } else {
+                    "'${preset.title}' 을(를) 가져왔습니다. " +
+                        "목표카드 ${saved.targets.size}장, 결과 화면 단계 ${saved.steps.size}개."
+                },
+            )
+            onDone(saved)
         }
     }
 
